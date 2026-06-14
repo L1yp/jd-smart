@@ -1,0 +1,17 @@
+# 抓包 / 数据库产物
+*.db
+*.sqlite
+*.sqlite3
+
+# 本地真实凭据 —— 绝不提交（example 模板可提交）
+jd_smart_secrets.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 杂项
+*.log
+.DS_Store

@@ -1,0 +1,53 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "JD Smart (小京鱼)",
+        "description": "Enter the signing constants captured from the app. seg1/key/device_md are long-lived; tgt is the login ticket and expires.",
+        "data": {
+          "seg1": "seg1 (constant id)",
+          "key": "HmacSHA1 key",
+          "device_md": "device_md (device fingerprint md5)",
+          "tgt": "tgt (login ticket)",
+          "hard_platform": "hard_platform (model)",
+          "app_version": "app_version",
+          "plat_version": "plat_version",
+          "channel": "channel",
+          "plat": "plat"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This account is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "JD Smart options",
+        "description": "Update tgt when it expires. Devices: one per line as name|device_id|feed_id.",
+        "data": {
+          "tgt": "tgt (login ticket, update on expiry)",
+          "scan_interval": "Scan interval (seconds)",
+          "devices": "Devices (name|device_id|feed_id, one per line)"
+        }
+      }
+    }
+  },
+  "services": {
+    "get_device_snapshot": {
+      "name": "Query device snapshot",
+      "description": "Call getDeviceSnapshot_v1 and return the device status snapshot.",
+      "fields": {
+        "device_id": {
+          "name": "device_id",
+          "description": "Device id used in the query string."
+        },
+        "feed_id": {
+          "name": "feed_id",
+          "description": "Device feed_id used in the body."
+        }
+      }
+    }
+  }
+}

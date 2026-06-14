@@ -1,0 +1,18 @@
+get_device_snapshot:
+  name: 查询设备快照
+  description: 调用小京鱼 getDeviceSnapshot_v1，返回设备状态快照（带返回值，可在开发者工具里查看）。
+  fields:
+    device_id:
+      name: device_id
+      description: 设备 device_id（query 里那个，例如 0123456789abcdef0123456789abcdef）。
+      required: true
+      example: 0123456789abcdef0123456789abcdef
+      selector:
+        text:
+    feed_id:
+      name: feed_id
+      description: 设备 feed_id（body 里那个长整数）。
+      required: true
+      example: "100000000000000000"
+      selector:
+        text:

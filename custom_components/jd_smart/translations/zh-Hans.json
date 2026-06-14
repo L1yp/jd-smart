@@ -1,0 +1,53 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "小京鱼 JD Smart",
+        "description": "填入从 App 抓到的签名常量。seg1/key/device_md 长期不变；tgt 是登录票据，会过期。",
+        "data": {
+          "seg1": "seg1（恒定标识）",
+          "key": "HmacSHA1 密钥",
+          "device_md": "device_md（设备指纹 md5）",
+          "tgt": "tgt（登录票据）",
+          "hard_platform": "hard_platform（机型）",
+          "app_version": "app_version",
+          "plat_version": "plat_version",
+          "channel": "channel",
+          "plat": "plat"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "该账号已配置"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "小京鱼选项",
+        "description": "tgt 过期可在此更新。设备：每行一个，格式 名称|device_id|feed_id。",
+        "data": {
+          "tgt": "tgt（登录票据，过期时更新）",
+          "scan_interval": "轮询间隔（秒）",
+          "devices": "设备列表（名称|device_id|feed_id，每行一个）"
+        }
+      }
+    }
+  },
+  "services": {
+    "get_device_snapshot": {
+      "name": "查询设备快照",
+      "description": "调用 getDeviceSnapshot_v1，返回设备状态快照。",
+      "fields": {
+        "device_id": {
+          "name": "device_id",
+          "description": "query 里用的设备 device_id。"
+        },
+        "feed_id": {
+          "name": "feed_id",
+          "description": "body 里用的设备 feed_id。"
+        }
+      }
+    }
+  }
+}
