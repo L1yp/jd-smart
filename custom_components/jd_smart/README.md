@@ -79,19 +79,20 @@ data:
 
 - `<名称> 状态`：online/offline，属性里带 `streams`（完整字典）、`device_status`、`error` 等；
 - `<名称> <stream_id>`：每个数据流一个数值传感器（如 Voltage / Electric / Power / CurrentPowerSum），值取 `current_value`，能转数字就转。stream 动态出现，自动补建。
+- `<名称> 实时功率`（W）：**计算型**，= 电压 × 电流（视在功率，设备未直接上报瓦特）。功率因数≈1 的负载与真实有功功率相差很小。需要设备同时上报 `Voltage` 与 `Electric` 才会生成。
+- `<名称> 今日用电量`（kWh）：**计算型**，对 `CurrentPowerSum` 增量累加，本地零点清零，`state_class=TOTAL_INCREASING`（可直接进能量看板）。跨 HA 重启不丢；容忍设备计数被清零/回绕。需要设备上报 `CurrentPowerSum`。
 
-### 单位/缩放（设备相关，按需自己换算）
+### 单位/缩放（设备相关，集成内已集中标定）
 
-原始值不带单位，且常是放大整数。例如 `Voltage=234937` ≈ 234.937 V（看着是毫伏）。
-建议用模板传感器换算到真实单位，例如：
+原始值不带单位、且常是放大整数。缩放因子集中在 `sensor.py` 顶部三个常量，是整个集成的“单一真相”：
 
-```yaml
-template:
-  - sensor:
-      - name: 插座电压
-        unit_of_measurement: V
-        device_class: voltage
-        state: "{{ states('sensor.xxx_voltage') | float(0) / 1000 }}"
-```
+| 常量 | 含义 | 当前值（“解释 A”，已与小京鱼 App 实测 ≈19W 核对） |
+|---|---|---|
+| `VOLTAGE_TO_VOLT` | Voltage 原始 → V | `0.001`（毫伏） |
+| `ELECTRIC_TO_AMP` | Electric 原始 → A | `0.001`（毫安） |
+| `ENERGY_RAW_TO_KWH` | CurrentPowerSum 原始 → kWh | `0.0001`（0.1Wh） |
 
-Electric / Power / CurrentPowerSum 的含义与缩放因设备型号而异，先看原始值再定。
+> 注：仅凭抓包数据，电流/能量的绝对刻度存在 **10 倍歧义**（两种解释功率因数都≈0.94，无法区分）。
+> 若你的 App 实时功率/今日电量与显示差 10 倍，切到“解释 B”：把 `ELECTRIC_TO_AMP` 改 `0.01`、
+> `ENERGY_RAW_TO_KWH` 改 `0.001` 即可（实时功率会变 ~190W、电量量级 ×10）。
+> `Power` 是开关量（on/off），由 binary_sensor 平台呈现，不在此换算。
