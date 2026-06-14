@@ -1,8 +1,15 @@
-"""数值传感器：每个 stream 一个（开关量 Power 走 binary_sensor）。
+"""数值传感器。
 
-另有两个“计算型”传感器，不是直接来自某个 stream：
-- 实时功率（W）：Voltage × Electric（视在功率，设备未直接上报瓦特）；
-- 今日用电量（kWh）：对 CurrentPowerSum 增量累加，本地零点清零。
+设备实际只上报 4 个 stream：
+- Voltage          电压，毫伏(mV) → V
+- Electric         电流，毫安(mA) → A（这里按 mA 直接显示）
+- Power            继电器开关量(on/off)，走 binary_sensor 平台
+- CurrentPowerSum  **实时有功功率**，毫瓦(mW) → W（名字含“Sum”但其值会上下波动，
+                   是瞬时功率而非累计电量；已与外部空调伴侣实测待机 <3W 对齐）
+
+在此之上派生两个实体：
+- 实时功率（W）：直接取 CurrentPowerSum（设备已算好功率因数的真有功功率）；
+- 今日用电量（kWh）：对实时功率做梯形时间积分（设备无累计电量流），本地零点清零。
 """
 from __future__ import annotations
 
@@ -32,16 +39,15 @@ from homeassistant.util import dt as dt_util
 from .const import BINARY_STREAMS, DOMAIN
 from .coordinator import JdSmartCoordinator
 
-# ── 原始值 → 物理单位的缩放（设备相关，整个集成的“单一真相”）─────────────
-# 当前取“解释 A”（已和小京鱼 App 实测约 19W 核对）：
-#   Voltage  原始毫伏(mV)  → V    ×0.001
-#   Electric 原始毫安(mA)  → A    ×0.001
-#   CurrentPowerSum 原始 0.1Wh    → kWh  ×0.0001
-# 若 App 实测功率/电量与显示差 10 倍，切到“解释 B”：电流当厘安(×0.01)、能量计数当 Wh，
-# 即把下面改成 ELECTRIC_TO_AMP=0.01、ENERGY_RAW_TO_KWH=0.001（其余无需动）。
+# ── 原始值 → 物理单位的缩放（设备统一用“毫”单位：mV / mA / mW）──────────────
+# 实时功率：CurrentPowerSum=2960 → 2.96 W，与空调伴侣实测待机 <3W 吻合。
+# 若空调开机后实时功率明显不是额定值（差 10 倍），改 POWER_RAW_TO_WATT 即可。
 VOLTAGE_TO_VOLT = 0.001
 ELECTRIC_TO_AMP = 0.001
-ENERGY_RAW_TO_KWH = 0.0001
+POWER_RAW_TO_WATT = 0.001
+
+# CurrentPowerSum 由专门的“实时功率”实体呈现，不再当普通 stream 数值传感器。
+POWER_STREAM = "CurrentPowerSum"
 
 # 已知 stream 的单位/缩放（device_class, 单位, 缩放因子, state_class, 显示精度）。
 SENSOR_META: dict[str, dict] = {
@@ -57,14 +63,6 @@ SENSOR_META: dict[str, dict] = {
         "unit": UnitOfElectricCurrent.MILLIAMPERE,
         "factor": 1,  # 原始即毫安，按 mA 直接显示
         "state_class": SensorStateClass.MEASUREMENT,
-    },
-    "CurrentPowerSum": {
-        # 累计总用电量。原始为 0.1Wh，换算到 kWh 显示（修正了原先按 Wh×1 偏大 10 倍的标定）。
-        "device_class": SensorDeviceClass.ENERGY,
-        "unit": UnitOfEnergy.KILO_WATT_HOUR,
-        "factor": ENERGY_RAW_TO_KWH,
-        "state_class": SensorStateClass.TOTAL_INCREASING,
-        "precision": 3,
     },
 }
 
@@ -115,21 +113,23 @@ async def async_setup_entry(
             for stream_id in streams:
                 if stream_id in BINARY_STREAMS:
                     continue  # 开关量交给 binary_sensor 平台
+                if stream_id == POWER_STREAM:
+                    continue  # 实时功率由专门实体呈现
                 key = (feed, stream_id)
                 if key in known:
                     continue
                 known.add(key)
                 new.append(JdStreamSensor(coordinator, entry, dev, stream_id))
-            # 计算型：实时功率（需要电压与电流两个 stream）
-            pkey = (feed, "__power__")
-            if pkey not in known and "Voltage" in streams and "Electric" in streams:
-                known.add(pkey)
-                new.append(JdPowerSensor(coordinator, entry, dev))
-            # 计算型：今日用电量（需要累计电量 stream）
-            dkey = (feed, "__daily__")
-            if dkey not in known and "CurrentPowerSum" in streams:
-                known.add(dkey)
-                new.append(JdDailyEnergySensor(coordinator, entry, dev))
+            # 派生：实时功率（W）与今日用电量（kWh），都基于 CurrentPowerSum
+            if POWER_STREAM in streams:
+                pkey = (feed, "__power__")
+                if pkey not in known:
+                    known.add(pkey)
+                    new.append(JdPowerSensor(coordinator, entry, dev))
+                dkey = (feed, "__daily__")
+                if dkey not in known:
+                    known.add(dkey)
+                    new.append(JdDailyEnergySensor(coordinator, entry, dev))
         if new:
             async_add_entities(new)
 
@@ -216,16 +216,12 @@ class JdStreamSensor(CoordinatorEntity[JdSmartCoordinator], SensorEntity):
 
 
 class JdPowerSensor(CoordinatorEntity[JdSmartCoordinator], SensorEntity):
-    """实时功率（W）= 电压 × 电流。
-
-    设备未直接上报瓦特，这里取 Voltage×Electric 的视在功率（VA）当作功率；
-    对功率因数接近 1 的负载，与真实有功功率（W）相差很小。
-    """
+    """实时功率（W）：直接取 CurrentPowerSum（设备已算好功率因数的真有功功率）。"""
 
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_suggested_display_precision = 1
+    _attr_suggested_display_precision = 2
 
     def __init__(self, coordinator, entry, dev) -> None:
         super().__init__(coordinator)
@@ -244,20 +240,15 @@ class JdPowerSensor(CoordinatorEntity[JdSmartCoordinator], SensorEntity):
         snap = self._snap()
         if not snap:
             return None
-        streams = snap.get("streams", {})
-        v = _num(streams.get("Voltage"))
-        i = _num(streams.get("Electric"))
-        if not isinstance(v, (int, float)) or not isinstance(i, (int, float)):
+        val = _num(snap.get("streams", {}).get(POWER_STREAM))
+        if not isinstance(val, (int, float)):
             return None
-        return round(v * VOLTAGE_TO_VOLT * i * ELECTRIC_TO_AMP, 2)
+        return round(val * POWER_RAW_TO_WATT, 3)
 
     @property
     def available(self) -> bool:
         snap = self._snap()
-        if not (super().available and snap):
-            return False
-        streams = snap.get("streams") or {}
-        return "Voltage" in streams and "Electric" in streams
+        return super().available and bool(snap) and POWER_STREAM in (snap.get("streams") or {})
 
 
 @dataclass
@@ -265,17 +256,18 @@ class _DailyEnergyData(ExtraStoredData):
     """每日用电量传感器跨重启需要持久化的内部状态。"""
 
     day: str | None
-    last_raw: float | None
     value: float
 
     def as_dict(self) -> dict:
-        return {"day": self.day, "last_raw": self.last_raw, "value": self.value}
+        return {"day": self.day, "value": self.value}
 
 
 class JdDailyEnergySensor(CoordinatorEntity[JdSmartCoordinator], RestoreSensor):
-    """今日用电量（kWh）：对 CurrentPowerSum 的增量累加，本地零点清零。
+    """今日用电量（kWh）：对实时功率做梯形时间积分，本地零点清零。
 
-    - 用“增量累加”而非“当前-零点基准”，天然容忍设备计数被清零/回绕；
+    设备没有累计电量流，只能由功率随时间积分得到电量（∫P·dt）。
+    - 梯形法：每次取上次与本次功率的均值乘以时间差累加；
+    - 仅在两次读数间隔 ≤ 3×轮询周期时积分，超出（重启/断连）则跳过该段，避免凭空累加；
     - RestoreSensor 持久化当日累计，HA 重启不丢；
     - state_class=TOTAL_INCREASING：每天清零会被能量看板识别为新周期。
     """
@@ -295,39 +287,54 @@ class JdDailyEnergySensor(CoordinatorEntity[JdSmartCoordinator], RestoreSensor):
         self._attr_unique_id = f"{entry.entry_id}_{self._feed}_daily_energy"
         self._attr_device_info = device_info(dev)
         self._day: date | None = None
-        self._last_raw: float | None = None
         self._value: float = 0.0
+        self._last_t = None          # 上次积分点时间（datetime）
+        self._last_p: float | None = None  # 上次功率（W）
 
     def _snap(self):
         return (self.coordinator.data or {}).get(self._feed)
 
-    def _raw(self) -> float | None:
+    def _power_w(self) -> float | None:
         snap = self._snap()
         if not snap:
             return None
-        val = _num(snap.get("streams", {}).get("CurrentPowerSum"))
-        return float(val) if isinstance(val, (int, float)) else None
+        val = _num(snap.get("streams", {}).get(POWER_STREAM))
+        return val * POWER_RAW_TO_WATT if isinstance(val, (int, float)) else None
+
+    def _gap_cap_hours(self) -> float:
+        interval = self.coordinator.update_interval
+        secs = interval.total_seconds() if interval else 60.0
+        return max(secs, 60.0) * 3.0 / 3600.0
 
     @callback
-    def _recompute(self) -> None:
-        raw = self._raw()
-        today = dt_util.now().date()
+    def _update_integral(self) -> None:
+        now = dt_util.now()
+        today = now.date()
+        p = self._power_w()
         if self._day is None:
             self._day = today
         if today != self._day:
-            # 跨天：清零，从当前读数重新起算（忽略零点前后一个轮询周期的零头）
+            # 跨天：清零，从当前点重新起算
             self._day = today
             self._value = 0.0
-            self._last_raw = raw
+            self._last_t = now if p is not None else None
+            self._last_p = p
             return
-        if raw is None:
-            return  # 本轮无有效读数，保留上次累计
-        if self._last_raw is not None and raw >= self._last_raw:
-            self._value = round(
-                self._value + (raw - self._last_raw) * ENERGY_RAW_TO_KWH, 4
-            )
-        # raw < last_raw：设备计数被清零/回绕，本次增量跳过，仅更新基准
-        self._last_raw = raw
+        if p is None:
+            # 读数缺失：暂停积分，避免跨空洞累加
+            self._last_t = None
+            self._last_p = None
+            return
+        if self._last_t is not None and self._last_p is not None:
+            dt_h = (now - self._last_t).total_seconds() / 3600.0
+            if 0 < dt_h <= self._gap_cap_hours():
+                # 梯形积分：平均功率(W) × 时间(h) = Wh，再 /1000 → kWh
+                self._value = round(
+                    self._value + (self._last_p + p) / 2.0 * dt_h / 1000.0, 5
+                )
+            # 间隔过大（重启/长断连）：跳过该段，仅重置基准
+        self._last_t = now
+        self._last_p = p
 
     @property
     def native_value(self):
@@ -337,15 +344,14 @@ class JdDailyEnergySensor(CoordinatorEntity[JdSmartCoordinator], RestoreSensor):
     def extra_state_attributes(self) -> dict:
         return {
             "day": self._day.isoformat() if self._day else None,
-            "source_stream": "CurrentPowerSum",
-            "source_raw": self._last_raw,
+            "source_stream": POWER_STREAM,
+            "last_power_w": self._last_p,
         }
 
     @property
     def extra_restore_state_data(self) -> _DailyEnergyData:
         return _DailyEnergyData(
             day=self._day.isoformat() if self._day else None,
-            last_raw=self._last_raw,
             value=self._value,
         )
 
@@ -358,17 +364,18 @@ class JdDailyEnergySensor(CoordinatorEntity[JdSmartCoordinator], RestoreSensor):
                 self._value = float(d.get("value") or 0.0)
             except (TypeError, ValueError):
                 self._value = 0.0
-            lr = d.get("last_raw")
-            self._last_raw = float(lr) if isinstance(lr, (int, float)) else None
             ds = d.get("day")
             try:
                 self._day = date.fromisoformat(ds) if ds else None
             except (TypeError, ValueError):
                 self._day = None
-        self._recompute()
+        # 重启后不跨空洞积分：清空上次积分点，首个新读数仅作基准
+        self._last_t = None
+        self._last_p = None
+        self._update_integral()
         self.async_write_ha_state()
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        self._recompute()
+        self._update_integral()
         self.async_write_ha_state()

@@ -77,22 +77,34 @@ data:
 
 `result` 是被转义的内层 JSON 字符串，集成会自动解析。每个设备生成：
 
+设备实际只上报 4 个 stream：
+
+| stream | 含义 | 单位（设备统一用“毫”） | 呈现实体 |
+|---|---|---|---|
+| `Voltage` | 电压 | 毫伏 mV → V | `<名称> Voltage` |
+| `Electric` | 电流 | 毫安 mA（按 mA 直接显示） | `<名称> Electric` |
+| `Power` | 继电器开关量 | on/off | binary_sensor `<名称> Power` |
+| `CurrentPowerSum` | **实时有功功率**（名字含 Sum，但其值会上下波动，是瞬时功率不是累计电量） | 毫瓦 mW → W | 见下方“实时功率” |
+
+每个设备生成：
+
 - `<名称> 状态`：online/offline，属性里带 `streams`（完整字典）、`device_status`、`error` 等；
-- `<名称> <stream_id>`：每个数据流一个数值传感器（如 Voltage / Electric / Power / CurrentPowerSum），值取 `current_value`，能转数字就转。stream 动态出现，自动补建。
-- `<名称> 实时功率`（W）：**计算型**，= 电压 × 电流（视在功率，设备未直接上报瓦特）。功率因数≈1 的负载与真实有功功率相差很小。需要设备同时上报 `Voltage` 与 `Electric` 才会生成。
-- `<名称> 今日用电量`（kWh）：**计算型**，对 `CurrentPowerSum` 增量累加，本地零点清零，`state_class=TOTAL_INCREASING`（可直接进能量看板）。跨 HA 重启不丢；容忍设备计数被清零/回绕。需要设备上报 `CurrentPowerSum`。
+- `<名称> 实时功率`（W）：直接取 `CurrentPowerSum`（设备计量芯片已算好功率因数的**真有功功率**）。已与外部空调伴侣实测待机 <3W 对齐。
+- `<名称> 今日用电量`（kWh）：设备**没有累计电量流**，由实时功率做**梯形时间积分**（∫P·dt）得到，本地零点清零，`state_class=TOTAL_INCREASING`（可直接进能量看板）。跨 HA 重启不丢；两次读数间隔过大（重启/断连）时跳过该段，不凭空累加。
 
 ### 单位/缩放（设备相关，集成内已集中标定）
 
-原始值不带单位、且常是放大整数。缩放因子集中在 `sensor.py` 顶部三个常量，是整个集成的“单一真相”：
+设备各路数值统一是“毫”单位，缩放因子集中在 `sensor.py` 顶部，是整个集成的“单一真相”：
 
-| 常量 | 含义 | 当前值（“解释 A”，已与小京鱼 App 实测 ≈19W 核对） |
+| 常量 | 含义 | 当前值 |
 |---|---|---|
-| `VOLTAGE_TO_VOLT` | Voltage 原始 → V | `0.001`（毫伏） |
-| `ELECTRIC_TO_AMP` | Electric 原始 → A | `0.001`（毫安） |
-| `ENERGY_RAW_TO_KWH` | CurrentPowerSum 原始 → kWh | `0.0001`（0.1Wh） |
+| `VOLTAGE_TO_VOLT` | Voltage 毫伏 → V | `0.001` |
+| `ELECTRIC_TO_AMP` | Electric 毫安 → A（电流实体本身按 mA 显示，此常量备用） | `0.001` |
+| `POWER_RAW_TO_WATT` | CurrentPowerSum 毫瓦 → W | `0.001` |
 
-> 注：仅凭抓包数据，电流/能量的绝对刻度存在 **10 倍歧义**（两种解释功率因数都≈0.94，无法区分）。
-> 若你的 App 实时功率/今日电量与显示差 10 倍，切到“解释 B”：把 `ELECTRIC_TO_AMP` 改 `0.01`、
-> `ENERGY_RAW_TO_KWH` 改 `0.001` 即可（实时功率会变 ~190W、电量量级 ×10）。
-> `Power` 是开关量（on/off），由 binary_sensor 平台呈现，不在此换算。
+> **关于功率“真有功 vs 视在”**：`电压×电流`=视在功率(VA)，对空调待机这类开关电源(SMPS)负载功率因数极低(~0.15)，
+> V×I 会比真功率高出数倍（如 235V×0.082A≈19VA，真功率仅≈3W）。所以**不要**用 V×I 当功率；
+> 设备已直接给出真有功功率 `CurrentPowerSum`，本集成即取它。
+>
+> **校准**：若空调开机后实时功率明显不是额定值（差约 10 倍），改 `POWER_RAW_TO_WATT` 即可。
+> 待机 2960(mW)→2.96W；开机时该值应接近空调实际功率（约几百~上千 W）。
