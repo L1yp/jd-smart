@@ -246,6 +246,13 @@ class JdPowerSensor(CoordinatorEntity[JdSmartCoordinator], SensorEntity):
         return round(val * POWER_RAW_TO_WATT, 3)
 
     @property
+    def extra_state_attributes(self) -> dict:
+        # 暴露设备原始值，便于核对换算：原始 2960 → 显示 2.96 W（÷1000，同电压毫伏）。
+        snap = self._snap()
+        raw = _num((snap or {}).get("streams", {}).get(POWER_STREAM)) if snap else None
+        return {"raw": raw, "factor": POWER_RAW_TO_WATT, "source_stream": POWER_STREAM}
+
+    @property
     def available(self) -> bool:
         snap = self._snap()
         return super().available and bool(snap) and POWER_STREAM in (snap.get("streams") or {})
