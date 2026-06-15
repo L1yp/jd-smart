@@ -91,8 +91,13 @@ class JdSmartClient:
 
     @staticmethod
     def now_ts() -> str:
-        """形如 2026-06-14T12:59:57.403Z（UTC，毫秒）。"""
-        n = datetime.now(timezone.utc)
+        """形如 2026-06-14T20:59:57.403Z（毫秒）。
+
+        实测京东这套发的是“北京时间(UTC+8)墙上时钟 + Z 后缀”（Z 名不副实，服务端也按此校验；
+        发真 UTC 会比服务器慢 8 小时，被判 token invalid）。固定 +8 偏移免依赖系统 tzdata，
+        与 _device_md() 取“当年第几天”的处理对齐。
+        """
+        n = datetime.now(timezone(timedelta(hours=8)))
         return n.strftime("%Y-%m-%dT%H:%M:%S.") + f"{n.microsecond // 1000:03d}Z"
 
     @staticmethod

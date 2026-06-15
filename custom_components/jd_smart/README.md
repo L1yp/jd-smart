@@ -62,7 +62,7 @@ data:
 
 ## 注意
 
-- **时间戳时区**：本集成用 UTC 生成 `ts`。若服务器因时间戳拒绝（鉴权失败但 key 没问题），多半是 App 实际用的是本地时间贴 `Z`；改 `api.py` 的 `now_ts()` 即可。
+- **时间戳时区**：实测京东服务端按“北京时间(UTC+8)墙上时钟贴 `Z`”校验 `ts`，发**真 UTC** 会慢 8 小时被判 `token invalid`。集成 `now_ts()` 已用固定 UTC+8 偏移生成，无需改动；自测脚本 `query_device.py` 同理（已去掉旧的 `--local` 开关）。
 - **device_md 每日滚动**：= `md5(...+":"+当年第几天)`，集成按 `Asia/Shanghai` 取“今天第几天”实时算（对齐 App 与京东服务端）。若设备/服务端不在东八区、午夜前后偶发鉴权失败，改 `api.py` `_device_md()` 里的时区即可。
 - **签名只覆盖 body**（不含 query）：`device_id` 在 query、`feed_id` 在 body，两者都要填。
 - `tag="postjson_body"` 是 postJson 类请求的标记；其它接口若是别的请求类型，签名 tag 可能不同（届时另抓）。

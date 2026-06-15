@@ -46,9 +46,11 @@ API = "https://api.smart.jd.com/c/service/integration/v1/getDeviceSnapshot_v1"
 TAG = "postjson_body"  # 注意：这是 postJson 请求的标记；其它请求类型可能不同
 
 
-def now_ts(local: bool = False) -> str:
-    # 默认 UTC（Z 的本义）。若 App 实际是“本地时间贴 Z”，传 local=True。
-    n = datetime.now().astimezone() if local else datetime.now(timezone.utc)
+def now_ts() -> str:
+    # App 实测：发的是“北京时间(UTC+8)墙上时钟 + Z 后缀”（Z 名不副实，京东服务端也按此校验；
+    # 发真 UTC 会比服务器慢 8 小时，被判 token invalid）。固定 +8 偏移免依赖宿主机时区/系统
+    # tzdata，与 device_md() 取“当年第几天”的处理对齐。
+    n = datetime.now(timezone(timedelta(hours=8)))
     return n.strftime("%Y-%m-%dT%H:%M:%S.") + f"{n.microsecond // 1000:03d}Z"
 
 
@@ -81,8 +83,8 @@ def authorization(body: str, ts: str, cfg=CONFIG) -> str:
     return f"smart {cfg['seg1']}:::{sign(body, ts, cfg)}:::{ts}"
 
 
-def query(device_id: str, feed_id, cfg=CONFIG, timeout=15, local_time=False):
-    ts = now_ts(local_time)
+def query(device_id: str, feed_id, cfg=CONFIG, timeout=15):
+    ts = now_ts()
     body = build_body(feed_id)
     qs = urllib.parse.urlencode({
         "hard_platform": cfg["hard_platform"],
@@ -129,11 +131,9 @@ if __name__ == "__main__":
     ap.add_argument("--device-id")
     ap.add_argument("--feed-id")
     ap.add_argument("--selftest", action="store_true")
-    ap.add_argument("--local", action="store_true",
-                    help="时间戳用本地时间贴 Z（默认 UTC）；若服务器嫌时间戳过期就试这个")
     a = ap.parse_args()
     if a.selftest:
         sys.exit(0 if selftest() else 1)
     if not (a.device_id and a.feed_id):
         ap.error("需要 --device-id 和 --feed-id（或 --selftest）")
-    print(json.dumps(query(a.device_id, a.feed_id, local_time=a.local), ensure_ascii=False, indent=2))
+    print(json.dumps(query(a.device_id, a.feed_id), ensure_ascii=False, indent=2))
