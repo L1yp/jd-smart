@@ -20,9 +20,12 @@
 |---|---|---|
 | `seg1` | 恒定标识，如 `a188caaf...` | 否 |
 | `key` | HmacSHA1 密钥，如 `e685c8d1...` | 重新登录可能轮换 |
-| `device_md` | 设备指纹 md5 = `md5("Android"+app_version+hard_platform+plat_version+":"+versionCode)` | 否 |
 | `tgt` | 登录票据 `AAJq...` | **会过期/每次登录变** |
-| `hard_platform` / `app_version` / `plat_version` / `channel` / `plat` | 设备指纹与 query 参数 | 否 |
+| `hard_platform` / `app_version` / `plat_version` / `channel` / `plat` | device_md 输入 + query 参数 | 否（App 升级才变） |
+
+> `device_md` **无需填写**：= `md5("Android"+app_version+hard_platform+plat_version+":"+当年第几天)`，
+> 末尾 `DAY_OF_YEAR` **每天滚动一次**——这正是“tgt 没变插件也会失效”的根因。集成用上面三个设备参数按
+> `Asia/Shanghai` 当天实时算，不再手填、不会每天过期。App 升级后只需更新 `app_version`/`plat_version`/`hard_platform`。
 
 ## 用法
 
@@ -60,6 +63,7 @@ data:
 ## 注意
 
 - **时间戳时区**：本集成用 UTC 生成 `ts`。若服务器因时间戳拒绝（鉴权失败但 key 没问题），多半是 App 实际用的是本地时间贴 `Z`；改 `api.py` 的 `now_ts()` 即可。
+- **device_md 每日滚动**：= `md5(...+":"+当年第几天)`，集成按 `Asia/Shanghai` 取“今天第几天”实时算（对齐 App 与京东服务端）。若设备/服务端不在东八区、午夜前后偶发鉴权失败，改 `api.py` `_device_md()` 里的时区即可。
 - **签名只覆盖 body**（不含 query）：`device_id` 在 query、`feed_id` 在 body，两者都要填。
 - `tag="postjson_body"` 是 postJson 类请求的标记；其它接口若是别的请求类型，签名 tag 可能不同（届时另抓）。
 - 先用仓库根目录的 `query_device.py` 联网自测通过，再依赖本集成：

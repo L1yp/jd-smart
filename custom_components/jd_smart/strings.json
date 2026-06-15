@@ -3,11 +3,10 @@
     "step": {
       "user": {
         "title": "JD Smart (小京鱼)",
-        "description": "Enter the signing constants captured from the app. seg1/key/device_md are long-lived; tgt is the login ticket and expires.",
+        "description": "Enter the signing constants captured from the app. seg1/key are long-lived; tgt is the login ticket and expires. device_md is computed automatically (it rolls daily).",
         "data": {
           "seg1": "seg1 (constant id)",
           "key": "HmacSHA1 key",
-          "device_md": "device_md (device fingerprint md5)",
           "tgt": "tgt (login ticket)",
           "hard_platform": "hard_platform (model)",
           "app_version": "app_version",

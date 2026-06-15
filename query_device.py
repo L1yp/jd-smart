@@ -3,7 +3,7 @@
 小京鱼(com.jd.smart) 设备快照查询 —— 独立版（仅标准库，可直接联网测）。
 复用已逆向出的 HmacSHA1 签名，调 getDeviceSnapshot_v1。
 
-把 CONFIG 里的常量换成你自己的；seg1/key/device_md 重新登录也不变，tgt 每次登录会变、会过期。
+把 CONFIG 里的常量换成你自己的；seg1/key 重新登录也不变，tgt 每次登录会变、会过期；device_md 每天滚动，由脚本自动算。
 
 用法:
     python query_device.py --selftest                      # 不联网，校验签名算法
@@ -20,14 +20,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 CONFIG = {
     # 真实凭据放到同目录 jd_smart_secrets.json（已 .gitignore），不要写进本文件、不要提交。
-    # 用 frida_capture.js + host.py 抓 sign 表得到 seg1/key/device_md；tgt 抓请求头得到。
+    # 用 frida_capture.js + host.py 抓 sign 表得到 seg1/key；tgt 抓请求头得到。
     "seg1": "<your_seg1>",
     "key": "<your_hmac_key>",
-    # device_md = md5("Android" + app_version + hard_platform + plat_version + ":" + versionCode)
-    "device_md": "<your_device_md>",
+    # device_md 不用填：含“当年第几天”每天滚动，由 device_md() 用下面三个设备参数实时算。
     "tgt": "<your_tgt>",  # 登录票据，会过期
     # 设备指纹（拼进 query string）——按你的设备改
     "hard_platform": "HWI-AL00",
@@ -61,8 +61,18 @@ def build_body(feed_id) -> str:
     )
 
 
+def device_md(cfg=CONFIG) -> str:
+    # 设备指纹，每天滚动一次（含 DAY_OF_YEAR）——必须实时算，不能写死。
+    # = md5("Android" + app_version + hard_platform + plat_version + ":" + 当年第几天)
+    # 用 Asia/Shanghai 取“今天第几天”，对齐 App(设备本地时区)与京东服务端。
+    doy = datetime.now(ZoneInfo("Asia/Shanghai")).timetuple().tm_yday
+    raw = f"Android{cfg['app_version']}{cfg['hard_platform']}{cfg['plat_version']}:{doy}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
 def sign(body: str, ts: str, cfg=CONFIG) -> str:
-    msg = cfg["device_md"] + TAG + body + ts + cfg["seg1"] + cfg["device_md"]
+    dmd = device_md(cfg)
+    msg = dmd + TAG + body + ts + cfg["seg1"] + dmd
     mac = hmac.new(cfg["key"].encode(), msg.encode(), hashlib.sha1).digest()
     return base64.b64encode(mac).decode()
 

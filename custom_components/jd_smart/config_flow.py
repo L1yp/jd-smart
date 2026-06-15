@@ -12,7 +12,6 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_APP_VERSION,
     CONF_CHANNEL,
-    CONF_DEVICE_MD,
     CONF_DEVICES,
     CONF_HARD_PLATFORM,
     CONF_KEY,
@@ -34,7 +33,6 @@ ACCOUNT_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_SEG1): str,
         vol.Required(CONF_KEY): str,
-        vol.Required(CONF_DEVICE_MD): str,
         vol.Required(CONF_TGT): str,
         vol.Required(CONF_HARD_PLATFORM, default=DEFAULT_HARD_PLATFORM): str,
         vol.Required(CONF_APP_VERSION, default=DEFAULT_APP_VERSION): str,

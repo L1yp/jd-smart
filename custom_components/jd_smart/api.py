@@ -3,8 +3,11 @@
 签名算法（已逆向并验证）：
     Authorization: smart <seg1>:::<seg2>:::<ts>
     seg2 = Base64( HmacSHA1( key, device_md + "postjson_body" + body + ts + seg1 + device_md ) )
+    device_md = md5("Android"+app_version+hard_platform+plat_version+":"+DAY_OF_YEAR)
     body = {"json":{"feed_id":<int>,"version":"2.0","digest":""}}   # 紧凑、键序固定
 签名只覆盖 body（不含 query），所以 device_id 只放 query、feed_id 进 body。
+device_md 末尾含"当年第几天"，每天滚动一次，必须实时算（见 _device_md）——
+这就是"tgt 没变插件也会失效"的真正原因。
 """
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ import hmac
 import json
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
@@ -69,7 +73,6 @@ class JdSmartClient:
         *,
         seg1: str,
         key: str,
-        device_md: str,
         tgt: str,
         hard_platform: str,
         app_version: str,
@@ -80,7 +83,6 @@ class JdSmartClient:
         self._session = session
         self.seg1 = seg1
         self.key = key
-        self.device_md = device_md
         self.tgt = tgt
         self.hard_platform = hard_platform
         self.app_version = app_version
@@ -102,8 +104,23 @@ class JdSmartClient:
             ensure_ascii=False,
         )
 
+    def _device_md(self) -> str:
+        """设备指纹，每天滚动一次（"tgt 没变插件也失效"的真凶）。
+
+        逆向自 RestClient.getAuthorization：
+            c10 = md5("Android" + app_version + deviceModel + Build.VERSION.RELEASE
+                      + ":" + Calendar.get(DAY_OF_YEAR))
+        末尾 DAY_OF_YEAR(当年第几天)每天 +1，所以 device_md 每天都变——必须实时算，
+        不能写死。其余三段(app_version/hard_platform/plat_version)和 query 参数同源。
+        用 Asia/Shanghai 取"今天第几天"，对齐 App(设备本地时区)与京东服务端。
+        """
+        doy = datetime.now(ZoneInfo("Asia/Shanghai")).timetuple().tm_yday
+        raw = f"Android{self.app_version}{self.hard_platform}{self.plat_version}:{doy}"
+        return hashlib.md5(raw.encode()).hexdigest()
+
     def _sign(self, body: str, ts: str) -> str:
-        msg = self.device_md + TAG + body + ts + self.seg1 + self.device_md
+        device_md = self._device_md()
+        msg = device_md + TAG + body + ts + self.seg1 + device_md
         mac = hmac.new(self.key.encode(), msg.encode(), hashlib.sha1).digest()
         return base64.b64encode(mac).decode()
 

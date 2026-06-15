@@ -3,11 +3,10 @@
     "step": {
       "user": {
         "title": "小京鱼 JD Smart",
-        "description": "填入从 App 抓到的签名常量。seg1/key/device_md 长期不变；tgt 是登录票据，会过期。",
+        "description": "填入从 App 抓到的签名常量。seg1/key 长期不变；tgt 是登录票据，会过期。device_md 每天滚动，已自动计算，无需填写。",
         "data": {
           "seg1": "seg1（恒定标识）",
           "key": "HmacSHA1 密钥",
-          "device_md": "device_md（设备指纹 md5）",
           "tgt": "tgt（登录票据）",
           "hard_platform": "hard_platform（机型）",
           "app_version": "app_version",

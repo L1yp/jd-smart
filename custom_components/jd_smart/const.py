@@ -8,7 +8,7 @@ BINARY_STREAMS = {"Power"}
 # config entry (account / device fingerprint)
 CONF_SEG1 = "seg1"
 CONF_KEY = "key"
-CONF_DEVICE_MD = "device_md"
+# device_md 不再手填：含 DAY_OF_YEAR 每天滚动，由 api 用 app_version/hard_platform/plat_version 实时算
 CONF_TGT = "tgt"
 CONF_HARD_PLATFORM = "hard_platform"
 CONF_APP_VERSION = "app_version"

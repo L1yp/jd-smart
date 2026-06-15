@@ -27,12 +27,15 @@ python host.py -p <小京鱼包名> -s frida_capture.js --spawn
 
 - `seg1`：`Authorization: smart <seg1>:::...` 的第一段（恒定）
 - `key`：`Mac.init` 的 `key_txt`（HmacSHA1 密钥，恒定）
-- `device_md`：签名原文首段（设备指纹 md5，恒定）
 - `tgt`：请求头 `tgt`（登录票据，**会过期**）
+
+> `device_md` 不用抓：= `md5("Android"+app_version+hard_platform+plat_version+":"+当年第几天)`，
+> 末尾含 `DAY_OF_YEAR` **每天滚动一次**（这才是“tgt 没变插件也会失效”的根因）；集成与 `query_device.py` 都按 `Asia/Shanghai` 当天实时算，无需手填。
 
 签名算法（已验证）：
 
 ```
+device_md = md5("Android"+app_version+hard_platform+plat_version+":"+DAY_OF_YEAR)  # 每天变
 seg2 = Base64( HmacSHA1( key, device_md + "postjson_body" + body + ts + seg1 + device_md ) )
 ```
 
