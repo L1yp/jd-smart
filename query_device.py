@@ -19,8 +19,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 CONFIG = {
     # 真实凭据放到同目录 jd_smart_secrets.json（已 .gitignore），不要写进本文件、不要提交。
@@ -65,7 +64,8 @@ def device_md(cfg=CONFIG) -> str:
     # 设备指纹，每天滚动一次（含 DAY_OF_YEAR）——必须实时算，不能写死。
     # = md5("Android" + app_version + hard_platform + plat_version + ":" + 当年第几天)
     # 用 Asia/Shanghai 取“今天第几天”，对齐 App(设备本地时区)与京东服务端。
-    doy = datetime.now(ZoneInfo("Asia/Shanghai")).timetuple().tm_yday
+    # UTC+8(中国标准时，无夏令时，等价 Asia/Shanghai)；固定偏移免依赖系统 IANA 时区库
+    doy = datetime.now(timezone(timedelta(hours=8))).timetuple().tm_yday
     raw = f"Android{cfg['app_version']}{cfg['hard_platform']}{cfg['plat_version']}:{doy}"
     return hashlib.md5(raw.encode()).hexdigest()
 

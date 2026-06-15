@@ -16,8 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -114,7 +113,8 @@ class JdSmartClient:
         不能写死。其余三段(app_version/hard_platform/plat_version)和 query 参数同源。
         用 Asia/Shanghai 取"今天第几天"，对齐 App(设备本地时区)与京东服务端。
         """
-        doy = datetime.now(ZoneInfo("Asia/Shanghai")).timetuple().tm_yday
+        # UTC+8(中国标准时，无夏令时，等价 Asia/Shanghai)；固定偏移免依赖系统 IANA 时区库
+        doy = datetime.now(timezone(timedelta(hours=8))).timetuple().tm_yday
         raw = f"Android{self.app_version}{self.hard_platform}{self.plat_version}:{doy}"
         return hashlib.md5(raw.encode()).hexdigest()
 

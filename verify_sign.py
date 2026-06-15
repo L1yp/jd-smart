@@ -14,8 +14,7 @@
 import base64
 import hashlib
 import hmac
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 # ==== 已抓到的稳定值（从 hook / header 得到）====
 SEG1 = "<your_seg1>"        # 恒定账号/设备标识，=header 里的 seg1
@@ -56,7 +55,8 @@ def device_md() -> str:
     末尾 DAY_OF_YEAR 每天 +1，所以每天滚动——必须实时算。验证历史样本时给 sign() 传
     当天的 uuid 即可。用 Asia/Shanghai 对齐 App(设备本地时区)与京东服务端。
     """
-    doy = datetime.now(ZoneInfo("Asia/Shanghai")).timetuple().tm_yday
+    # UTC+8(中国标准时，无夏令时，等价 Asia/Shanghai)；固定偏移免依赖系统 IANA 时区库
+    doy = datetime.now(timezone(timedelta(hours=8))).timetuple().tm_yday
     raw = f"Android{APP_VERSION}{HARD_PLATFORM}{PLAT_VERSION}:{doy}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
