@@ -13,7 +13,11 @@ frida_capture.js + host.py    # 抓包 + 抓签名工具（用来获取你自己
 query_device.py               # 独立命令行查询器（联网自测用，仅标准库）
 verify_sign.py                # 签名离线复现/校验
 jd_smart_secrets.example.json # 凭据模板（真实值放 jd_smart_secrets.json，已 .gitignore）
+docs/REVERSE_ENGINEERING.md   # 完整逆向分析笔记（协议/签名算法/方法论/排错）
 ```
+
+> 📄 协议细节、签名算法、frida 抓取方法论与常见失效排查，见
+> [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)。
 
 ## 1. 抓你自己的签名常量
 

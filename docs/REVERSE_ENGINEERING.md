@@ -1,0 +1,327 @@
+# 小京鱼（com.jd.smart）设备快照接口 · 逆向分析笔记
+
+> 个人研究/自用记录。本文只描述协议与方法论，**不含任何真实密钥**（凭据放
+> `jd_smart_secrets.json`，已 `.gitignore`）。文中所有 `<...>`、`a188ca…` 一类均为占位/示意。
+
+目标接口：`getDeviceSnapshot_v1`（按 `device_id` + `feed_id` 拉设备实时快照，
+如电流/电压/功率）。通过逆向出的 `HmacSHA1` 鉴权签名直接调云端，无需官方网关。
+
+---
+
+## 0. 速查（TL;DR）
+
+```
+POST https://api.smart.jd.com/c/service/integration/v1/getDeviceSnapshot_v1
+     ?hard_platform=HWI-AL00&app_version=1.17.0&device_id=<32hex>
+     &plat_version=9&channel=xjgw-android&plat=Android
+
+Headers:
+  app_identity : WL
+  authorization: smart <seg1>:::<seg2>:::<ts>
+  tgt          : <登录票据，会过期>
+  content-type : application/json; charset=utf-8
+  user-agent   : okhttp/4.10.0
+
+Body（紧凑、键序固定，被签名的就是这串字节）:
+  {"json":{"feed_id":<int>,"version":"2.0","digest":""}}
+
+签名:
+  device_md = md5("Android" + app_version + hard_platform + plat_version + ":" + DAY_OF_YEAR)
+  message   = device_md + "postjson_body" + body + ts + seg1 + device_md
+  seg2      = Base64( HmacSHA1(key, message) )          # 标准 base64，带 '=' 填充
+  ts        = 北京时间(UTC+8)墙上时钟，格式 %Y-%m-%dT%H:%M:%S.mmmZ   # Z 名不副实！
+```
+
+**三个最容易踩的坑**（每一个都对应一次线上事故/commit）：
+
+1. `device_md` 末尾的 `DAY_OF_YEAR`（当年第几天）**每天 +1** → 即使 `tgt` 没变，
+   插件/脚本第二天也会签名失效。必须实时算，不能写死。
+2. `ts` 发的是 **UTC+8 墙上时钟贴 `Z`**，不是真 UTC。发真 UTC 会比服务器慢 8 小时，
+   被判 `token invalid`（401）。
+3. 签名**只覆盖 body**（不含 query）：`device_id` 在 query、`feed_id` 在 body，两者都要给对。
+
+---
+
+## 1. 接口总览
+
+### 1.1 请求
+
+- **方法 / URL**：`POST https://api.smart.jd.com/c/service/integration/v1/getDeviceSnapshot_v1`
+- **Query 参数**（设备指纹 + 定位，不参与签名）：
+
+  | 参数 | 示例 | 含义 |
+  |---|---|---|
+  | `hard_platform` | `HWI-AL00` | 机型，= App `BaseInfo.getDeviceModel()` |
+  | `app_version` | `1.17.0` | App 版本 |
+  | `device_id` | `<32 位 hex>` | 目标设备 id（**只在 query**） |
+  | `plat_version` | `9` | = `Build.VERSION.RELEASE` |
+  | `channel` | `xjgw-android` | 渠道 |
+  | `plat` | `Android` | 平台 |
+
+- **Body**：`{"json":{"feed_id":<int>,"version":"2.0","digest":""}}`
+  - 必须**紧凑**（无空格）、**键序固定**；`feed_id` 是整数（**只在 body**）。
+  - 发出去的就是被签名的那串字节——**不能让 HTTP 框架重新序列化**（HA 集成里用
+    `data=body.encode()` 而非 `json=`，正是这个原因）。
+
+### 1.2 响应
+
+成功（外层 `status:0`，`result` 是一层 JSON **字符串**，需再 parse）：
+
+```json
+{
+  "status": 0,
+  "error": null,
+  "result": "{\"digest\":\"432848389\",\"fromDeviceSuccess\":false,\"status\":\"1\",\"streams\":[{\"current_value\":\"83\",\"stream_id\":\"Electric\"},{\"current_value\":\"236040\",\"stream_id\":\"Voltage\"},{\"current_value\":\"1\",\"stream_id\":\"Power\"},{\"current_value\":\"3170\",\"stream_id\":\"CurrentPowerSum\"}]}"
+}
+```
+
+- 内层 `streams[].stream_id / current_value` 才是真正的设备数据点
+  （`Electric` 电流、`Voltage` 电压、`Power` 开关、`CurrentPowerSum` 累计电量等）。
+
+鉴权失败（HTTP 仍是 200，靠 body 里的 `status:100` + `error` 判断）：
+
+```json
+{ "result": {}, "error": { "errorInfo": "token invalid", "errorCode": "401" }, "status": 100 }
+```
+
+---
+
+## 2. 鉴权头与签名算法（核心）
+
+### 2.1 `Authorization` 结构
+
+```
+authorization: smart <seg1>:::<seg2>:::<ts>
+                     └seg1┘   └seg2┘   └ ts ┘
+```
+
+- `seg1`：40 位 hex（解出 20 字节），恒定的账号/设备标识。
+- `seg2`：base64 串（解出 20 字节），就是这次请求的签名。
+- `ts`：时间戳（也单独参与 HMAC 原文）。
+- 三段用 `:::` 分隔。`seg1`、`seg2` 都是 20 字节 → 一眼锁定 **SHA-1 家族**（HmacSHA1/SHA-1）。
+
+### 2.2 `device_md`（设备指纹，每天滚动）
+
+逆向自 `RestClient.getAuthorization`：
+
+```
+c10 = md5("Android" + app_version + deviceModel + Build.VERSION.RELEASE + ":" + Calendar.get(DAY_OF_YEAR))
+```
+
+对应到本仓库参数：
+
+```
+device_md = md5("Android" + app_version + hard_platform + plat_version + ":" + DAY_OF_YEAR)
+          = md5("Android" + "1.17.0"    + "HWI-AL00"     + "9"          + ":" + 167)   # 示例：第167天
+```
+
+- 末尾 `DAY_OF_YEAR`（当年第几天）**每天 +1**，所以 `device_md` 每天都变。
+- **这就是"tgt 没变，插件/脚本却第二天失效"的真正原因**——很多人误以为是票据过期。
+- `DAY_OF_YEAR` 按 **UTC+8（Asia/Shanghai，中国标准时无夏令时）** 取，对齐 App（设备本地时区）
+  与京东服务端。代码里用**固定 +8 偏移**算，免依赖宿主机时区 / 系统 IANA tzdata。
+
+### 2.3 HMAC 原文与 `seg2`
+
+```
+TAG     = "postjson_body"                                   # postJson 类请求的标记
+message = device_md + TAG + body + ts + seg1 + device_md    # device_md 首尾各拼一次
+seg2    = Base64( HmacSHA1(key, message) )                  # 标准 base64，带 '=' 填充
+```
+
+- `key`：HmacSHA1 密钥，从 frida 抓 `Mac.init` 的 `key_txt` 得到；恒定（重新登录**可能**轮换）。
+- `TAG` 与请求类型绑定：`postJson` 用 `postjson_body`；GET 等其它请求类型 tag 多半不同（届时另抓）。
+
+### 2.4 `ts` 时间戳（UTC+8 贴 Z 的坑）
+
+- 格式：`2026-06-16T20:59:57.403Z`（`%Y-%m-%dT%H:%M:%S.` + 毫秒 + `Z`）。
+- **实测**：客户端和服务端都用 **北京时间(UTC+8) 的墙上时钟** 直接贴 `Z` 后缀——`Z` 名不副实。
+- 发**真 UTC** 会比服务器慢 8 小时 → 被判 `token invalid`（401）。
+- 修法：固定 +8 偏移生成（与 `device_md` 取 `DAY_OF_YEAR` 同套路），免依赖宿主机时区。
+
+### 2.5 完整伪代码
+
+```python
+def authorization(body, ts, *, key, seg1, app_version, hard_platform, plat_version):
+    doy       = day_of_year_in_utc8()                      # 当年第几天（UTC+8）
+    device_md = md5(f"Android{app_version}{hard_platform}{plat_version}:{doy}")
+    message   = device_md + "postjson_body" + body + ts + seg1 + device_md
+    seg2      = base64(hmac_sha1(key, message))
+    return f"smart {seg1}:::{seg2}:::{ts}"
+
+ts   = utc8_wall_clock_with_Z()                            # 2026-06-16T20:59:57.403Z
+body = '{"json":{"feed_id":%d,"version":"2.0","digest":""}}' % feed_id
+```
+
+> 离线一比一复现见 [`verify_sign.py`](../verify_sign.py)；联网自测见 [`query_device.py`](../query_device.py)。
+
+---
+
+## 3. 各字段来源与生命周期
+
+| 字段 | 来源（怎么抓） | 是否常变 | 失效表现 |
+|---|---|---|---|
+| `seg1` | `Authorization` 头第一段 / hook | 否（账号设备级恒定） | — |
+| `key` | frida `Mac.init` 的 `key_txt` | 重新登录**可能**轮换 | 签名整体对不上 |
+| `tgt` | 请求头 `tgt` | **每次登录变 / 会过期** | `token invalid`（也可能是 ts 坑，先排时间戳） |
+| `device_md` | **不用抓**，由设备三参 + 当天实时算 | **每天滚动** | 次日签名失效（最隐蔽） |
+| `ts` | 本地生成（UTC+8 贴 Z） | 每次请求 | 真 UTC → `token invalid` |
+| `body` | 本地按 `feed_id` 拼 | 每次请求 | 键序/空格不对 → 签名失效 |
+| 设备五参 | App 抓一次 | App 升级才变 | `device_md` 随之变，需同步更新 |
+
+`seg1` / `key` 一次抓到长期可用；`tgt` 要随登录刷新；`device_md` 永远实时算。
+
+---
+
+## 4. App 内部调用链（混淆类名）
+
+```
+RestClient.postJson                       (com.jd.smart.base.net.http.RestClient)  ← 签名在此
+   └─> PostStringBuilder                  (混淆名 rc.e)
+        └─> PostStringRequest             (混淆名 vc.g)
+             └─> OkHttpRequest(...).a      (混淆名 vc.d)  @ OkHttpRequest.java:46  ← 把 authorization 头 add 进去
+                  └─> okhttp3 RealInterceptorChain.proceed → 发出
+```
+
+要点：
+
+- **App 代码命名空间是 `com.jd.smart`，不是启动包名 `com.jd.iots`**——crypto hook 的调用方过滤要按
+  `com.jd.smart` 收窄，否则要么抓不到、要么被 TLS 噪声淹没。
+- `vc.d` / `vc.g` / `rc.e` 是**当前 App 版本**的混淆名，**换版本会变**；变了用 auth-tracer 的调用栈重新认
+  （见 §5.3、[`trace_d_init.js`](../trace_d_init.js)）。
+- `device_md` 在更早某处被读出/算出，拼进 HMAC 原文首尾。
+
+---
+
+## 5. 逆向方法论与工具链
+
+整条链路一句话：**hook OkHttp 拦截器抓明文请求 → 锁定签名是 20 字节 SHA-1 系 → hook crypto API 抓
+算法/密钥/原文 → auth-tracer 定位拼装点 → 值溯源找 device_md/key 出处 → 离线复现验证**。
+
+主机侧 [`host.py`](../host.py) 把 frida `send()` 的记录落到 SQLite（`http` 表 + `sign` 表），方便 SQL 回溯。
+
+### 5.1 抓包：hook OkHttp，天然绕过 SSL pinning
+
+脚本：[`frida_okhttp_capture.js`](../frida_okhttp_capture.js)（或合并版 [`frida_capture.js`](../frida_capture.js) Part 1）。
+
+- hook `okhttp3.internal.http.RealInterceptorChain.proceed(Request)`，在 `proceed` 前后读
+  `Request`/`Response` 对象。
+- **在 TLS 之前、进程内读对象**，所以**不受 SSL pinning 影响**，也不用证书。
+- `proceed` 每过一个拦截器触发一次 → 同一请求多行，**带 `authorization`/`tgt` 的那行**是加完鉴权头之后的。
+- body 读取细节：`isOneShot` 的流式 body 跳过（读了会消费掉真正要发的内容）；响应用
+  `peekBody` 读副本不消费原始流。
+- okhttp 被混淆找不到默认类名时，脚本自动 `enumerateLoadedClasses` 列出疑似 `okhttp3/okio` 类供手填 `CONFIG`。
+
+### 5.2 定位签名：20 字节 → SHA-1 家族 → hook crypto
+
+脚本：[`frida_sign_capture.js`](../frida_sign_capture.js)（或合并版 Part 2）。
+
+- **判型**：`seg1`(40hex) 和 `seg2`(base64) 都解出 **20 字节** ⇒ 头号嫌疑 `HmacSHA1` / `SHA-1`。
+- hook 一切"能产出摘要/签名"的 API：`MessageDigest` / `Mac` / `Signature` / `Cipher` /
+  `Base64` / `SecretKeySpec` / `IvParameterSpec`，每次调用打印 + `send` 结构化记录入 `sign` 表。
+- **关键产物**：
+  - `Mac.init` → 拿到 HMAC **key**（`key_txt`）；
+  - `Mac.update`（按线程累积）→ 拼出 HMAC **原文**（看到 `device_md+tag+body+ts+seg1+device_md` 的结构）；
+  - `Mac.doFinal` → 20 字节 → base64 即 **seg2**；
+  - `MD.digest`（MD5）→ 看到 `device_md` 的算法与输入。
+- **稳定性收窄**（直接决定会不会把 App 搞崩）：
+  - 只 hook `SIGN_ALGS`（默认 sha1 系，子串小写匹配），用算法名先挡掉 TLS 的 SHA-256/AES；
+  - 默认**不** hook `Cipher`/`Signature`（AES 在 TLS 里极热，hook 它最容易闪退；RSA/ECDSA 输出 >20B 基本不是目标）；
+  - 调用栈过滤（`calledFromApp`，按 `com.jd.smart` 收窄）**只在算法命中后**才抓栈，不在热路径抓栈；
+  - Base64 只看 ≤64B 的小输入（跳过图片/大 JSON）；
+  - 仍闪退就把 `ARM_DELAY_MS` 设几千毫秒，延迟装签名 hook，错开启动检测/首页加载窗口。
+
+### 5.3 auth-tracer：定位"拼签名的那一帧"，并判 Java/native
+
+合并版 [`frida_capture.js`](../frida_capture.js) Part 3。
+
+- hook `okhttp3.Request$Builder.header/addHeader` 与 `Headers$Builder.add/set/...`；
+  当某次设的是 `authorization` 头（或值里带 `:::`）时，**dump 调用栈**。
+- 栈里**紧贴 okhttp 之前的 App 帧 = 拼签名处**；顺着它就能找到算法/原文位置。
+- 若那帧标 `(Native Method)` ⇒ 签名在 native，得转 native hook。**这是判 Java/native 最直接的证据**，
+  与 crypto 算法过滤无关。
+- 本项目据此定位到 `OkHttpRequest(vc.d).a @ OkHttpRequest.java:46`（见 §4），且签名在 Java 层。
+
+### 5.4 值溯源：device_md / key 到底从哪来
+
+脚本：[`frida_trace_secret_src.js`](../frida_trace_secret_src.js)（反查"已知值"出处）+ 合并版 Part 4 secret-finder。
+
+- 已知某个值（如当前 `device_md`），但不知它从哪读/何时生成时，盯几类"值的出口"，命中目标值就打栈：
+  1. `SharedPreferences` `getString/putString`——标准 prefs 存取；
+  2. **`com.tencent.mmkv.MMKV` `decodeString/getString`**——京东系常用 MMKV，**标准 SP hook 抓不到它**；
+  3. `org.json.JSONObject` `getString/optString`——从接口响应 JSON 解析出来的那一刻（最可能直指下发接口），
+     命中时连整个 JSON 上下文一起 dump，看它和谁（如 `tgt`）一起下发。
+- 操作：触发设备刷新看**读取点**；退出账号→重新登录看**下发/生成点**。
+- 全没命中 ⇒ 值可能常驻内存（登录时算好放单例字段）或走别的存储，转静态 jadx 看 `OkHttpRequest(vc.d).a`。
+- `device_md` 最终确认是**本地实时算**（md5(设备参数 + DAY_OF_YEAR)），不是服务端下发——所以不用抓、只能算。
+
+### 5.5 落库 schema（`host.py`）
+
+- `http` 表：`ts/method/url/host/path/has_auth/has_tgt/code/req_headers/req_body/resp_headers/resp_body`
+  ——抓包全量，按 `has_auth`/`has_tgt`/`url` 建索引，方便筛"带鉴权头的设备请求"。
+- `sign` 表：`kind/algorithm/input_hex/input_txt/out_hex/out_b64/key_hex/key_txt/iv_hex/matched/target/stack`
+  ——每次 crypto 调用一条；`kind` 形如 `Mac.doFinal`/`MD.digest`/`*.Base64.*`/`Mac.init`/`SECRET@...`/`SRC@...`。
+  把 `TARGETS` 填成要找的 `seg1`/`seg2`，命中即 `matched=1` 并带调用栈，直接 SQL 反查。
+
+---
+
+## 6. 离线复现与联网自测
+
+```bash
+# 1) 离线复现签名算法（不联网，纯算）——确认算法实现正确
+python verify_sign.py            # 填好 key 后跑，打印 seg2 / Authorization
+
+# 2) 自测 body 拼装格式（不联网，不碰真实密钥）
+python query_device.py --selftest
+
+# 3) 真正联网查询（需 jd_smart_secrets.json 里的真实凭据）
+python query_device.py --device-id <32hex> --feed-id <feed_id>
+```
+
+- [`verify_sign.py`](../verify_sign.py)：一比一复现 `device_md → message → seg2`，对历史样本验签可传当天的 `device_md`。
+- [`query_device.py`](../query_device.py)：仅标准库的独立查询器，`--selftest` 校验拼装，带 `--device-id/--feed-id` 真查。
+- 凭据从同目录 `jd_smart_secrets.json` 覆盖进来（拷 `jd_smart_secrets.example.json` 改；该文件已 `.gitignore`）。
+
+---
+
+## 7. 常见失效与排查
+
+按"最容易→最隐蔽"排：
+
+1. **`token invalid` / 401，但 key 没动**：
+   - **先怀疑 `ts` 时间戳时区**（发了真 UTC？应为 UTC+8 贴 Z）。`query_device.py`/HA 集成已修成固定 UTC+8。
+   - 再怀疑 `tgt` 过期 → frida 重新抓一份当前 `tgt`。
+   - `--selftest` 签名计算正常、但联网 401，且时间戳已确认 ⇒ 基本就是 `tgt`。
+2. **昨天好的今天突然失效**：`device_md` 每日滚动（`DAY_OF_YEAR`）。确认在用**实时算**而非写死的旧值。
+3. **签名整体对不上**：`key` 重新登录被轮换 → 重抓 `key`；或 `body` 键序/空格不对、`feed_id` 类型不对。
+4. **App 升级后失效**：设备五参（尤其 `app_version`/`plat_version`/`hard_platform`）变了，`device_md` 随之变，
+   同步更新；混淆类名（`vc.d` 等）也可能变，用 auth-tracer 重新认。
+5. **HA 集成 sensor 变 unavailable**：多为 `tgt` 过期 → 集成"选项"里更新 `tgt`（无需删除重加）；`key` 变了则删集成重加。
+
+> 时区相关的两处实时计算（`device_md` 的 `DAY_OF_YEAR`、`ts` 的墙上时钟）都改用**固定 UTC+8 偏移**，
+> 免依赖系统 tzdata；若设备/服务端不在东八区、午夜前后偶发鉴权失败，改对应函数里的偏移即可。
+
+---
+
+## 8. 安全与合规
+
+- 仅限**个人研究 / 自用自己账号的设备**。不内置、不提交任何密钥。
+- `jd_smart_secrets.json`、`*.db`（抓包库，含 token）已 `.gitignore`。
+- `tgt` 是登录票据，**勿公开分享**；过期在集成选项里更新。
+- 联网自测会把真实 `device_id`/`feed_id` 与实时数据打到终端，注意别外传截图/日志。
+
+---
+
+## 附录：仓库文件清单
+
+| 文件 | 作用 |
+|---|---|
+| [`frida_capture.js`](../frida_capture.js) | **合并版** hook：okhttp 抓包 + crypto 签名 + auth-tracer + secret-finder（落 `http`/`sign` 表） |
+| [`frida_okhttp_capture.js`](../frida_okhttp_capture.js) | 单独的 OkHttp 抓包 hook |
+| [`frida_sign_capture.js`](../frida_sign_capture.js) | 单独的 crypto 签名 hook（MessageDigest/Mac/Signature/Cipher/Base64） |
+| [`frida_trace_secret_src.js`](../frida_trace_secret_src.js) | 反查已知值（device_md 等）出处：SharedPreferences / MMKV / JSONObject |
+| [`trace_d_init.js`](../trace_d_init.js) | 一次性调试：dump `OkHttpRequest(vc.d)` 构造参数 + 调用栈 |
+| [`host.py`](../host.py) | Frida 主机：加载 hook 脚本，把记录落 SQLite（`http` + `sign` 表） |
+| [`verify_sign.py`](../verify_sign.py) | 离线一比一复现/校验签名 |
+| [`query_device.py`](../query_device.py) | 仅标准库的独立联网查询器（`--selftest` / `--device-id`+`--feed-id`） |
+| [`jd_smart_secrets.example.json`](../jd_smart_secrets.example.json) | 凭据模板（真实值放 `jd_smart_secrets.json`，已忽略） |
+| [`custom_components/jd_smart/`](../custom_components/jd_smart/) | Home Assistant 自定义集成（`api.py` 即签名+调用实现） |
