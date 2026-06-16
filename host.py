@@ -336,11 +336,19 @@ def main():
                     insert_sign(d)
                 except Exception as e:
                     print("[db error]", e)
-                # wjlogin 登录态(WUserSigInfo)读写：高亮一行便于扫（整份 JSON 在 sign 表 input_txt）
+                # wjlogin 登录态读写/刷新/文件IO：高亮一行便于扫（整份内容在 sign 表 input_txt）
                 k = d.get("kind") or ""
-                if k.startswith("WUserSig"):
-                    js = (d.get("input_txt") or "").replace("\n", " ")
-                    print(f'    [WJLOGIN] {k}  json[{len(js)}B]={js[:90]}..')
+                if k.startswith("WUserSig") or k.startswith("WJ."):
+                    tgt = d.get("target")        # 文件 IO：md5(path) = 实际文件名
+                    res = d.get("out_b64")       # shouldRefreshA2 的布尔结果
+                    if tgt:
+                        extra = f' file={tgt[:16]}.. path={(d.get("key_txt") or "")[:40]}'
+                    elif res is not None:
+                        extra = f' result={res}'
+                    else:
+                        extra = ""
+                    txt = (d.get("input_txt") or "").replace("\n", " ")
+                    print(f'    [WJLOGIN] {k}{extra}  data[{len(txt)}B]={txt[:70]}..')
             elif kind == "error":
                 print("[script error]", payload.get("data"))
         elif message.get("type") == "log":

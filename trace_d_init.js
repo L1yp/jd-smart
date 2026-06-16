@@ -6,6 +6,106 @@
 /* wjlogin 登录态(WUserSigInfo)读写追踪 —— 所有 frida_*.js 内置（见 REVERSE_ENGINEERING.md §5.6）
  * createUserInfoFromJSON(读/初始化) + toJSONObject(写/落盘)，两者 dump 调用栈看更新机制。
  * 放在 vc.d 早退之前调用，所以即便找不到 vc.d 也照常抓登录态读写。 */
+/* =======================================================================
+ *  wjlogin 补充 hook：A2(tgt) 刷新判定/动作 + 登录态文件读写 —— 所有 frida_*.js 内置（见 §5.6）
+ *    jd.wjlogin_sdk.common.h.c.b()                  判断是否该刷新 A2(tgt) —— 看返回值 + 触发栈
+ *    jd.wjlogin_sdk.common.h.c.refreshLoginStatus() 刷新登录态动作
+ *    static jd.wjlogin_sdk.util.v.b(content, path)  保存数据文件（实际文件名 = md5hex(path)）
+ *    static jd.wjlogin_sdk.util.v.g(path)           读取数据文件
+ *  均 dump 调用栈；落 host.py sign 表(kind=WJ.*)。类晚加载自动重试，与 WUserSigInfo hook 互不影响。
+ * ======================================================================= */
+function installWjExtraHooks() {
+    var WJX = { refresh: false, file: false };
+    var Throwable = Java.use('java.lang.Throwable');
+    var Log = Java.use('android.util.Log');
+    function stk() { try { return Log.getStackTraceString(Throwable.$new()); } catch (e) { return '(no stack)'; } }
+    function clip(s, n) { if (s == null) return 'null'; s = '' + s; return s.length > n ? s.substring(0, n) + '..(+' + (s.length - n) + 'B)' : s; }
+    function md5hex(s) {
+        try {
+            var MD = Java.use('java.security.MessageDigest').getInstance('MD5');
+            var JS = Java.use('java.lang.String');
+            var d = MD.digest(JS.$new('' + s).getBytes('UTF-8'));
+            var h = ''; for (var i = 0; i < d.length; i++) { var v = d[i] & 0xff; h += (v < 16 ? '0' : '') + v.toString(16); }
+            return h;
+        } catch (e) { return '(md5? ' + e + ')'; }
+    }
+    var seen = {};
+    function emit(kind, title, info, opts) {
+        var s = stk(), sig = kind + '|' + s.split('\n').slice(0, 8).join('|'), first = !seen[sig];
+        if (first) seen[sig] = 1;
+        console.log('\n########## ' + title + '  [' + kind + '] ##########');
+        console.log(info);
+        if (first) { console.log(s); console.log(' ↑ 紧贴 jd.wjlogin_sdk 之前的 App 帧 = 触发处（更新机制看这里）'); }
+        else console.log(' (调用栈同前次，省略)');
+        console.log('############################################\n');
+        var rec = { kind: kind, stack: s, matched: 1 };
+        if (opts) for (var kk in opts) rec[kk] = opts[kk];
+        try { send({ type: 'sign', data: rec }); } catch (e) {}
+    }
+    function hookRefresh(C) {
+        var b = C.b;
+        if (b && b.overloads) b.overloads.forEach(function (ov) {
+            if (!ov.argumentTypes || ov.argumentTypes.length !== 0) return; // 只要无参 b()
+            ov.implementation = function () {
+                var r = ov.apply(this, arguments);
+                emit('WJ.shouldRefreshA2', '是否该刷新A2 · h.c.b()', ' result = ' + r, { out_b64: '' + r });
+                return r;
+            };
+        });
+        var rf = C.refreshLoginStatus;
+        if (rf && rf.overloads) rf.overloads.forEach(function (ov) {
+            ov.implementation = function () {
+                emit('WJ.refreshLoginStatus', '刷新登录态 · refreshLoginStatus()', ' (进入) args=' + arguments.length, null);
+                return ov.apply(this, arguments);
+            };
+        });
+        console.log('[wjlogin+] hooked common.h.c.b()/refreshLoginStatus');
+    }
+    function hookFile(V) {
+        var b = V.b; // static b(String content, String path)
+        if (b && b.overloads) b.overloads.forEach(function (ov) {
+            if (!ov.argumentTypes || ov.argumentTypes.length !== 2) return;
+            ov.implementation = function (content, path) {
+                var p = '' + path, md = md5hex(p);
+                emit('WJ.fileSave', '保存数据文件 · v.b(content,path)',
+                    ' path = ' + p + '\n file = ' + md + '  (=md5hex(path))\n content = ' + clip(content, 1400),
+                    { input_txt: (content == null ? null : '' + content), key_txt: p, target: md });
+                return ov.apply(this, arguments);
+            };
+        });
+        var g = V.g; // static g(String path) -> content
+        if (g && g.overloads) g.overloads.forEach(function (ov) {
+            if (!ov.argumentTypes || ov.argumentTypes.length !== 1) return;
+            ov.implementation = function (path) {
+                var r = ov.apply(this, arguments);
+                var p = '' + path, md = md5hex(p);
+                emit('WJ.fileRead', '读取数据文件 · v.g(path)',
+                    ' path = ' + p + '\n file = ' + md + '  (=md5hex(path))\n content = ' + clip(r, 1400),
+                    { input_txt: (r == null ? null : '' + r), key_txt: p, target: md });
+                return r;
+            };
+        });
+        console.log('[wjlogin+] hooked util.v.b(save)/v.g(read)');
+    }
+    var specs = [
+        { cls: 'jd.wjlogin_sdk.common.h.c', key: 'refresh', fn: hookRefresh },
+        { cls: 'jd.wjlogin_sdk.util.v', key: 'file', fn: hookFile }
+    ];
+    var tries = 0, MAX = 40;
+    (function attempt() {
+        var pending = 0;
+        specs.forEach(function (sp) {
+            if (WJX[sp.key]) return;
+            var C = null; try { C = Java.use(sp.cls); } catch (e) { C = null; }
+            if (C) { try { sp.fn(C); } catch (e) { console.log('[wjlogin+] 安装 ' + sp.cls + ' 失败: ' + e); } WJX[sp.key] = true; }
+            else pending++;
+        });
+        if (pending && ++tries <= MAX) setTimeout(function () { Java.perform(attempt); }, 700);
+        else if (pending) specs.forEach(function (sp) { if (!WJX[sp.key]) console.log('[wjlogin+] 放弃：' + sp.cls + ' 未加载（版本可能改名/未集成）'); });
+    })();
+}
+Java.perform(function () { try { installWjExtraHooks(); } catch (e) { console.log('[!] wjlogin+ hook 安装失败: ' + e); } });
+
 var WJ_DONE = false;
 function installWjloginHook() {
   var CLS = 'jd.wjlogin_sdk.model.WUserSigInfo';

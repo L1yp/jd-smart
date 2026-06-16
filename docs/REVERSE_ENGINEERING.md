@@ -259,10 +259,10 @@ RestClient.postJson                       (com.jd.smart.base.net.http.RestClient
 - `http` 表：`ts/method/url/host/path/has_auth/has_tgt/code/req_headers/req_body/resp_headers/resp_body`
   ——抓包全量，按 `has_auth`/`has_tgt`/`url` 建索引，方便筛"带鉴权头的设备请求"。
 - `sign` 表：`kind/algorithm/input_hex/input_txt/out_hex/out_b64/key_hex/key_txt/iv_hex/matched/target/stack`
-  ——每次 crypto 调用一条；`kind` 形如 `Mac.doFinal`/`MD.digest`/`*.Base64.*`/`Mac.init`/`SECRET@...`/`SRC@...`/`WUserSig.*`。
+  ——每次 crypto 调用一条；`kind` 形如 `Mac.doFinal`/`MD.digest`/`*.Base64.*`/`Mac.init`/`SECRET@...`/`SRC@...`/`WUserSig.*`/`WJ.*`。
   把 `TARGETS` 填成要找的 `seg1`/`seg2`，命中即 `matched=1` 并带调用栈，直接 SQL 反查。
 
-### 5.6 wjlogin 登录态（WUserSigInfo）读写追踪（所有 frida_*.js 内置）
+### 5.6 wjlogin 登录态读写 / A2(tgt) 刷新 / 落盘追踪（所有 frida_*.js 内置）
 
 `tgt` / 登录票据由京东 wjlogin SDK 的 `jd.wjlogin_sdk.model.WUserSigInfo` 持有。**6 个 frida_*.js
 全部内置** `installWjloginHook()`，开箱即抓登录态的**读**与**写**两个口子：
@@ -276,11 +276,23 @@ RestClient.postJson                       (com.jd.smart.base.net.http.RestClient
 触发读/写的地方，顺它就看清「**更新机制**」——比如 token 刷新后是谁调用 `toJSONObject` 把新
 `tgt`/`a2` 写回磁盘。同一调用栈只打印一次（去重降噪），但每次调用都入库。
 
-- 落库：命中走 `sign` 表，`kind` 形如 `WUserSig.toJSONObject(写/落盘)` /
-  `WUserSig.createUserInfoFromJSON(读/初始化)`；整份 JSON 存 `input_txt`、调用栈存 `stack`。
-  `host.py` 控制台另打 `[WJLOGIN] …` 一行便于扫。
-- 时机：`--spawn` 早期该类可能尚未加载，hook 自带**重试**（每 0.7s，最多 ~21s）直到加载或超时；
-  想抓「进程启动从磁盘恢复」那一次务必 `--spawn`（attach 会错过启动期的读）。
+此外（`installWjExtraHooks()`，同样 6 脚本内置）还钉了 **A2(tgt) 刷新链路 + 真正的落盘 I/O**：
+
+- `jd.wjlogin_sdk.common.h.c.b()`：判断**是否该刷新 A2/tgt** 的谓词。看返回值（`true` = 这次会
+  触发刷新）+ 触发栈，就知道刷新的**判定时机与原因**。
+- `jd.wjlogin_sdk.common.h.c.refreshLoginStatus()`：刷新登录态的**动作**本身。
+- `static jd.wjlogin_sdk.util.v.b(content, path)`：**保存数据文件**——登录态/`tgt` 序列化后落盘的
+  底层。`path` 在内部经 **md5(hex)** 得真正文件名，脚本已替你算好（落 `target` 字段 = 实际文件名），
+  可直接 `adb pull /data/data/<pkg>/…/<md5>` 取文件。
+- `static jd.wjlogin_sdk.util.v.g(path)`：**读取数据文件**（与上对应的读侧）。
+
+只 hook 校验过参数个数的重载（如只钉无参 `b()`、双参 `v.b`、单参 `v.g`），避免被同名短方法误伤。
+
+- 落库：全部走 `sign` 表。`kind` 形如 `WUserSig.toJSONObject(写/落盘)` / `WJ.shouldRefreshA2` /
+  `WJ.refreshLoginStatus` / `WJ.fileSave` / `WJ.fileRead`；内容/JSON 存 `input_txt`，文件 `path` 存
+  `key_txt`、`md5(path)` 文件名存 `target`，调用栈存 `stack`。`host.py` 控制台另打 `[WJLOGIN] …` 便于扫。
+- 时机：相关类（`WUserSigInfo`/`common.h.c`/`util.v`）`--spawn` 早期可能未加载，hook 自带**重试**
+  （每 0.7s，最多 ~21–28s）直到加载或超时；想抓「进程启动从磁盘恢复」务必 `--spawn`（attach 会错过）。
 
 > 登录态 JSON 含 `a2` / `tgt` 等敏感票据；`*.db` 已 `.gitignore`，勿外传截图/日志。
 
