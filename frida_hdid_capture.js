@@ -4,15 +4,18 @@
  * frida_hdid_capture.js —— 抓 hdid 的「hash 原料」eid 在 SharedPreferences 的读/写
  *
  * 源码还原的 hdid 派生链（?.c()）：
- *   hdid = Base64( PHCNativeLoader.f().d(eid), NO_WRAP )
- *          PHCNativeLoader.d(String) -> private native byte[] GenHash(String)   // 算法在 .so 里
+ *   hdid = Base64( SHA-256(eid), NO_WRAP )                                       // 已确认：标准 SHA-256
+ *          = android.util.Base64.encodeToString( PHCNativeLoader.f().d(eid), 2 ) // flag 2 = NO_WRAP，标准字母表
+ *          PHCNativeLoader.d(String) -> native byte[] GenHash(String) == 标准 SHA-256（非自定义算法，32B 输出）
  *          入参 eid = b7.e.a(ctx) = c7.c.a(ctx, "phc", "eid", "")                // 从 SP 读出来的
+ *   命名: hdid = hash device id；did = device id = device finger（设备指纹）
  *   c7.c 就是一层 SharedPreferences 读写壳（静态方法，混淆名）：
  *          a(ctx, file, key, def)   = ctx.getSharedPreferences(file,0).getString(key, def)               // 读
  *          b(ctx, file, key, value) = ctx.getSharedPreferences(file,0).edit().putString(key, value).apply() // 写
  *
- * 结论：hdid 不是“每次现算的随机量”，而是 = hash(持久化在 SP[phc/eid] 的 eid)。
- * 只要拿到 SP[phc/eid] 的值，配合 GenHash 就能复现 hdid。本脚本专盯 c7.c.a / c7.c.b：
+ * 结论：hdid（hash device id）不是“每次现算的随机量”，而是 = Base64(SHA-256(eid))。
+ * eid = device id = device finger（设备指纹）。拿到 SP[phc/eid] 的 eid 即可完全离线复现 hdid
+ * （base64_std_nowrap(sha256(eid))，无需调 native）。本脚本专盯 c7.c.a / c7.c.b：
  *   - file=="phc" && key=="eid"  -> 这就是 hdid 的 hash 原料：完整打印【参数 + 调用栈】，并落 sign 表
  *   - 其它 phc.* 键（WATCH_PHC_ALL）-> 轻量一行（同一仓库常缓存 hdid 本身/其它指纹，顺手看）
  *
@@ -67,7 +70,7 @@ Java.perform(function () {
             console.log('  写入 value = "' + str(valOrDef) + '"   (= 即将被 GenHash 的 eid)');
         } else {
             console.log('  读出 return = "' + str(ret) + '"   (default="' + str(valOrDef) + '")');
-            console.log('  => hdid = Base64( PHCNativeLoader.GenHash( 上面这个 eid ) )');
+            console.log('  => hdid = Base64( SHA-256( 上面这个 eid ), NO_WRAP )   // GenHash 已确认=标准 SHA-256');
         }
         console.log('  ---- 调用栈 ----');
         console.log(s);
