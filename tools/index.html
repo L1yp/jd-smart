@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小京鱼 (com.jd.smart) 逆向算法工具台</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --border:#2a2f3a;
+    --fg:#e6e9ef; --muted:#9aa3b2; --accent:#4ea1ff; --accent2:#2b6fb3;
+    --ok:#39d98a; --bad:#ff5d6c; --warn:#ffcf5c; --mono:"Cascadia Code","JetBrains Mono",Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,"Segoe UI","Microsoft YaHei",sans-serif}
+  header{padding:18px 22px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#161a22,#0f1115)}
+  header h1{margin:0;font-size:18px;font-weight:650}
+  header p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
+  .wrap{max-width:1180px;margin:0 auto;padding:18px 22px 60px}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
+  .tabs button{background:var(--panel);color:var(--muted);border:1px solid var(--border);padding:9px 14px;border-radius:9px;cursor:pointer;font-size:13.5px;font-weight:600}
+  .tabs button:hover{color:var(--fg)}
+  .tabs button.active{background:var(--accent2);color:#fff;border-color:var(--accent)}
+  .panel{display:none}
+  .panel.active{display:block}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:16px}
+  .card h2{margin:0 0 4px;font-size:15px}
+  .card .sub{color:var(--muted);font-size:12.5px;margin:0 0 14px}
+  .card h3{margin:18px 0 8px;font-size:13px;color:var(--accent);text-transform:none;letter-spacing:.2px}
+  label{display:block;font-size:12px;color:var(--muted);margin:0 0 4px}
+  input,textarea,select{width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:12.5px}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+  textarea{resize:vertical;min-height:64px;white-space:pre;overflow-wrap:normal;overflow-x:auto}
+  .field{margin-bottom:12px}
+  .grid{display:grid;gap:12px}
+  .grid.c2{grid-template-columns:1fr 1fr}
+  .grid.c3{grid-template-columns:1fr 1fr 1fr}
+  .grid.c4{grid-template-columns:1fr 1fr 1fr 1fr}
+  @media(max-width:760px){.grid.c2,.grid.c3,.grid.c4{grid-template-columns:1fr}}
+  .row{display:flex;gap:8px;align-items:flex-end}
+  .row .field{flex:1;margin-bottom:0}
+  button.act{background:var(--accent2);color:#fff;border:1px solid var(--accent);border-radius:8px;padding:9px 16px;cursor:pointer;font-weight:600;font-size:13px}
+  button.act:hover{background:#2f7cc6}
+  button.ghost{background:var(--panel2);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:12.5px;white-space:nowrap}
+  button.ghost:hover{border-color:var(--accent)}
+  .btnbar{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 4px}
+  .out{position:relative}
+  .out textarea,.out .val{background:#0c0e13;border:1px dashed var(--border)}
+  .val{display:block;width:100%;min-height:20px;padding:8px 10px;border-radius:8px;font-family:var(--mono);font-size:12.5px;word-break:break-all;white-space:pre-wrap}
+  .copy{position:absolute;top:6px;right:6px;background:#222733;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer}
+  .copy:hover{color:var(--fg);border-color:var(--accent)}
+  .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700}
+  .badge.ok{background:rgba(57,217,138,.15);color:var(--ok)}
+  .badge.bad{background:rgba(255,93,108,.15);color:var(--bad)}
+  .badge.warn{background:rgba(255,207,92,.15);color:var(--warn)}
+  .hint{color:var(--muted);font-size:11.5px;margin-top:6px}
+  .err{color:var(--bad);font-size:12px;margin-top:6px;white-space:pre-wrap}
+  code{background:#0c0e13;padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:12px;color:#cdd6e4}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600}
+  td.k{color:var(--accent);font-family:var(--mono);white-space:nowrap}
+  td.v{font-family:var(--mono);word-break:break-all}
+  .pill{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:20px;padding:1px 8px;margin-left:6px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.two{grid-template-columns:1fr}}
+  .inline{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .inline label{display:inline-flex;align-items:center;gap:5px;margin:0;color:var(--fg);font-size:12.5px}
+  .inline input[type=radio]{width:auto}
+  details{margin-top:8px}
+  summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>小京鱼 (com.jd.smart / com.jd.iots) 逆向算法工具台</h1>
+  <p>纯前端 · 离线 · 数据不出本页。复刻 <code>docs/REVERSE_ENGINEERING.md</code> 与 <code>docs/GETHOUSES_PROGRESS.md</code> 中已验证的算法，供本地测试。</p>
+</header>
+<div class="wrap">
+  <div class="tabs" id="tabs">
+    <button data-tab="color" class="active">彩虹 Sign · HMAC-SHA256</button>
+    <button data-tab="codec">ciphertype:5 编解码 / 信封</button>
+    <button data-tab="old">旧接口 Sign · HmacSHA1</button>
+    <button data-tab="lab">哈希 / HMAC 实验台</button>
+  </div>
+
+  <!-- ============ TAB: 彩虹 Sign ============ -->
+  <section class="panel active" id="tab-color">
+    <div class="card">
+      <h2>彩虹网关 query <code>sign</code> 生成器 <span class="pill">api.m.jd.com</span></h2>
+      <p class="sub">
+        <code>sign = HMAC-SHA256(preimage, secret)</code> → 64hex；secret 当 <b>32 字符 ASCII 文本</b>（不是 fromhex）。
+        preimage = 18 个 key <b>按字母序</b>排序、<b>只拼 value</b>、用 <code>&amp;</code> 连接（App 里的 TreeMap）。
+        见进度 §7.3。secret 来自 native <code>NativeAlgorithmHelper.getSecretKey()</code>，按构建固定。
+      </p>
+
+      <div class="field">
+        <label>secret（32 字符，native getSecretKey 的返回；本机固定）</label>
+        <div class="row">
+          <div class="field"><input id="c_secret" placeholder="例如 6b086ed29b1a4483b4544143061b295d（不要提交真实值）"></div>
+          <button class="ghost" id="c_secret_toggle">显示</button>
+        </div>
+      </div>
+
+      <h3>每请求字段（每次都变）</h3>
+      <div class="grid c3">
+        <div class="field"><label>functionId</label><input id="c_functionId" value="jdsmart.house.getHouses"></div>
+        <div class="field"><label>body（真实请求体 JSON，无空格）</label><input id="c_body" value='{"pageSize":100,"page":1}'></div>
+        <div class="field"><label>t（毫秒时间戳）</label>
+          <div class="row"><div class="field"><input id="c_t" placeholder="留空=现在"></div><button class="ghost" id="c_t_now">现在</button></div>
+        </div>
+      </div>
+
+      <h3>设备档（14 项，抓一次即固定）<span class="pill">可从 ep 自动解析</span></h3>
+      <div class="grid c4">
+        <div class="field"><label>aid（设备 uuid 32hex）</label><input id="c_aid" placeholder="ef42…11b41"></div>
+        <div class="field"><label>uuid（=aid，留空自动同步）</label><input id="c_uuid" placeholder="留空 = 取 aid"></div>
+        <div class="field"><label>appid</label><input id="c_appid" value="jdsmart-android"></div>
+        <div class="field"><label>area（LBS 区域码）</label><input id="c_area" placeholder="20_1720_22909_60380"></div>
+        <div class="field"><label>build</label><input id="c_build" value="381"></div>
+        <div class="field"><label>client</label><input id="c_client" value="android"></div>
+        <div class="field"><label>clientVersion</label><input id="c_clientVersion" value="1.17.0"></div>
+        <div class="field"><label>d_brand</label><input id="c_d_brand" value="HUAWEI"></div>
+        <div class="field"><label>d_model</label><input id="c_d_model" value="HWI-AL00"></div>
+        <div class="field"><label>eid（设备指纹）</label><input id="c_eid" placeholder="eidA005…"></div>
+        <div class="field"><label>ext</label><input id="c_ext" value='{"prstate":"0"}'></div>
+        <div class="field"><label>networkType</label><input id="c_networkType" value="wifi"></div>
+        <div class="field"><label>osVersion</label><input id="c_osVersion" value="28"></div>
+        <div class="field"><label>partner</label><input id="c_partner" value="xjgw-android"></div>
+        <div class="field"><label>screen</label><input id="c_screen" value="1080*2160"></div>
+      </div>
+
+      <details>
+        <summary>从抓包 ep 信封自动解析设备档（粘贴 ep 的 JSON，可 URL 编码）</summary>
+        <div class="field" style="margin-top:8px">
+          <textarea id="c_ep" placeholder='粘贴 ?ep= 的内容（URL 编码或已解码的 {"hdid":...,"cipher":{...},"ciphertype":5,...} 均可）'></textarea>
+        </div>
+        <button class="ghost" id="c_ep_parse">解析并填入设备档</button>
+        <div class="err" id="c_ep_err"></div>
+      </details>
+
+      <h3>计算</h3>
+      <div class="field"><label>期望 wire sign（可选，64hex；填了就比对）</label><input id="c_expect" placeholder="009fef46…c185b2"></div>
+      <div class="btnbar"><button class="act" id="c_run">计算 sign</button> <span id="c_match"></span></div>
+      <div class="err" id="c_err"></div>
+
+      <div class="field out" style="margin-top:10px">
+        <label>preimage（被签字符串，18 段）</label>
+        <textarea id="c_preimage" readonly></textarea>
+        <button class="copy" data-copy="c_preimage">复制</button>
+      </div>
+      <div class="field out">
+        <label>sign（64 hex）</label>
+        <div class="val" id="c_sign"></div>
+        <button class="copy" data-copy="c_sign">复制</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB: codec ============ -->
+  <section class="panel" id="tab-codec">
+    <div class="card">
+      <h2>ciphertype:5 编解码器 <span class="pill">自定义字母表 Base64</span></h2>
+      <p class="sub">逆向自 App <code>decode()</code>：换表 base64（非加密）。ep / body 的 cipher 字段可完全离线解/造。字母表：
+        <code>KLMNOPQRST ABCDEFGHIJ UVWXYZ abcd opqrstuvwx efghijklmn yz 0-9 +/</code></p>
+      <div class="two">
+        <div>
+          <h3>解码（cipher → 明文）</h3>
+          <div class="field"><textarea id="dec_in" placeholder="粘贴一个 cipher 串">YW5ucw9fZK==</textarea></div>
+          <button class="act" id="dec_run">解码</button>
+          <div class="field out" style="margin-top:10px"><label>明文</label><div class="val" id="dec_out"></div><button class="copy" data-copy="dec_out">复制</button></div>
+          <div class="hint">十六进制：<span id="dec_hex" style="font-family:var(--mono)"></span></div>
+        </div>
+        <div>
+          <h3>编码（明文 → cipher）</h3>
+          <div class="field"><textarea id="enc_in" placeholder='例如 {"pageSize":100,"page":1}'>android</textarea></div>
+          <button class="act" id="enc_run">编码</button>
+          <div class="field out" style="margin-top:10px"><label>cipher</label><div class="val" id="enc_out"></div><button class="copy" data-copy="enc_out">复制</button></div>
+          <div class="hint">往返校验 decode(encode(x))==x：<span id="enc_rt"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>信封解析（ep / body → 明文字段）</h2>
+      <p class="sub">粘贴整个 <code>ep</code> 或 <code>body</code> 信封（URL 编码或已解码均可）。自动 URL-decode、解 cipher 各字段。</p>
+      <div class="field"><textarea id="env_in" placeholder='{"hdid":"…","ts":…,"cipher":{…},"ciphertype":5,"version":"1.2.0","appname":"com.jd.iots"}'></textarea></div>
+      <button class="act" id="env_run">解析信封</button>
+      <div class="err" id="env_err"></div>
+      <div id="env_meta" class="hint" style="margin-top:10px"></div>
+      <table id="env_tbl" style="margin-top:8px;display:none"><thead><tr><th>cipher 字段</th><th>密文</th><th>明文</th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <div class="card">
+      <h2>信封构造（明文字段 → ep / body）</h2>
+      <p class="sub">把明文 cipher 字段封成 <code>ciphertype:5</code> 信封，输出 JSON 与 URL 编码表单值。</p>
+      <div class="field"><label>cipher 明文字段（JSON 对象；ep 放设备档，body 放 <code>{"body":"…真实体…"}</code>）</label>
+        <textarea id="bld_fields" placeholder='{"body":"{\"pageSize\":100,\"page\":1}"}'>{"body":"{\"pageSize\":100,\"page\":1}"}</textarea></div>
+      <div class="grid c3">
+        <div class="field"><label>hdid</label><input id="bld_hdid" placeholder="设备硬件 id（base64，可留空）"></div>
+        <div class="field"><label>ts（毫秒）</label><div class="row"><div class="field"><input id="bld_ts" placeholder="留空=现在"></div><button class="ghost" id="bld_ts_now">现在</button></div></div>
+        <div class="field"><label>ridx</label><input id="bld_ridx" value="1"></div>
+        <div class="field"><label>ciphertype</label><input id="bld_ct" value="5"></div>
+        <div class="field"><label>version</label><input id="bld_ver" value="1.2.0"></div>
+        <div class="field"><label>appname</label><input id="bld_app" value="com.jd.iots"></div>
+      </div>
+      <div class="btnbar"><button class="act" id="bld_run">构造信封</button></div>
+      <div class="err" id="bld_err"></div>
+      <div class="field out" style="margin-top:10px"><label>信封 JSON</label><textarea id="bld_json" readonly></textarea><button class="copy" data-copy="bld_json">复制</button></div>
+      <div class="field out"><label>URL 编码（贴到 <code>ep=</code> 或 <code>body=</code> 后）</label><textarea id="bld_form" readonly></textarea><button class="copy" data-copy="bld_form">复制</button></div>
+    </div>
+  </section>
+
+  <!-- ============ TAB: 旧接口 ============ -->
+  <section class="panel" id="tab-old">
+    <div class="card">
+      <h2>旧接口 <code>getDeviceSnapshot_v1</code> 签名 <span class="pill">api.smart.jd.com</span></h2>
+      <p class="sub">
+        <code>Authorization: smart &lt;seg1&gt;:::&lt;seg2&gt;:::&lt;ts&gt;</code>，
+        <code>seg2 = Base64(HmacSHA1(key, device_md + "postjson_body" + body + ts + seg1 + device_md))</code>，
+        <code>device_md = md5("Android"+app_version+hard_platform+plat_version+":"+当年第几天)</code>（UTC+8，每天滚动）。
+      </p>
+      <div class="grid c2">
+        <div class="field"><label>key（HmacSHA1 密钥，文本）</label><input id="o_key" placeholder="Mac.init 的 key_txt（勿提交真实值）"></div>
+        <div class="field"><label>seg1（40hex，账号/设备级恒定）</label><input id="o_seg1" placeholder="header authorization 第一段"></div>
+      </div>
+      <div class="grid c3">
+        <div class="field"><label>app_version</label><input id="o_appv" value="1.17.0"></div>
+        <div class="field"><label>hard_platform（机型）</label><input id="o_hard" value="HWI-AL00"></div>
+        <div class="field"><label>plat_version（系统版本）</label><input id="o_plat" value="9"></div>
+      </div>
+      <div class="grid c2">
+        <div class="field"><label>feed_id（整数；用于拼 body）</label><input id="o_feed" placeholder="100000000000000000"></div>
+        <div class="field"><label>ts（UTC+8 墙钟贴 Z）</label><div class="row"><div class="field"><input id="o_ts" placeholder="留空=现在(UTC+8)"></div><button class="ghost" id="o_ts_now">现在</button></div></div>
+      </div>
+      <details>
+        <summary>高级：手动覆盖 body / device_md（验历史样本时用）</summary>
+        <div class="grid c2" style="margin-top:8px">
+          <div class="field"><label>body 覆盖（留空=按 feed_id 拼）</label><input id="o_body_ov" placeholder='{"json":{"feed_id":…,"version":"2.0","digest":""}}'></div>
+          <div class="field"><label>device_md 覆盖（留空=按当天算）</label><input id="o_dmd_ov" placeholder="32hex；验旧样本传当天的值"></div>
+        </div>
+      </details>
+      <div class="btnbar" style="margin-top:8px"><button class="act" id="o_run">计算签名</button></div>
+      <div class="err" id="o_err"></div>
+
+      <div class="grid c2" style="margin-top:10px">
+        <div class="field out"><label>device_md</label><div class="val" id="o_dmd"></div><button class="copy" data-copy="o_dmd">复制</button></div>
+        <div class="field out"><label>body</label><div class="val" id="o_body"></div><button class="copy" data-copy="o_body">复制</button></div>
+      </div>
+      <div class="field out"><label>message（HMAC 原文）</label><textarea id="o_msg" readonly></textarea><button class="copy" data-copy="o_msg">复制</button></div>
+      <div class="field out"><label>seg2（Base64）</label><div class="val" id="o_seg2"></div><button class="copy" data-copy="o_seg2">复制</button></div>
+      <div class="field out"><label>Authorization</label><div class="val" id="o_auth"></div><button class="copy" data-copy="o_auth">复制</button></div>
+    </div>
+  </section>
+
+  <!-- ============ TAB: lab ============ -->
+  <section class="panel" id="tab-lab">
+    <div class="card">
+      <h2>哈希实验台</h2>
+      <p class="sub">实时计算 MD5 / SHA-1 / SHA-256。输入可按 UTF-8 文本或 hex 字节解释。</p>
+      <div class="inline">
+        <label><input type="radio" name="l_mode" value="text" checked> UTF-8 文本</label>
+        <label><input type="radio" name="l_mode" value="hex"> Hex 字节</label>
+      </div>
+      <div class="field"><textarea id="l_input" placeholder="输入要哈希的内容">abc</textarea></div>
+      <div class="field out"><label>MD5</label><div class="val" id="l_md5"></div><button class="copy" data-copy="l_md5">复制</button></div>
+      <div class="field out"><label>SHA-1</label><div class="val" id="l_sha1"></div><button class="copy" data-copy="l_sha1">复制</button></div>
+      <div class="field out"><label>SHA-256</label><div class="val" id="l_sha256"></div><button class="copy" data-copy="l_sha256">复制</button></div>
+    </div>
+
+    <div class="card">
+      <h2>HMAC 实验台 <span class="pill">含 jdupgrade / 彩虹 通用验签</span></h2>
+      <p class="sub">key 默认按文本字节（彩虹/jdupgrade 都是 key-as-text）。原文(message)优先用 hook 抓到的 <code>input_txt</code>。</p>
+      <div class="grid c2">
+        <div class="field"><label>key</label><input id="h_key" placeholder="密钥（32 字符 secret 文本本身）"></div>
+        <div class="field"><label>算法</label><select id="h_algo"><option value="sha256">HMAC-SHA256（64hex）</option><option value="sha1">HMAC-SHA1（40hex）</option></select></div>
+      </div>
+      <div class="inline">
+        <label><input type="radio" name="h_keymode" value="text" checked> key 按文本</label>
+        <label><input type="radio" name="h_keymode" value="hex"> key 按 hex</label>
+      </div>
+      <div class="field"><label>message（被签原文 / preimage）</label><textarea id="h_msg" placeholder="例如 functionId&…&t（彩虹）或 hook 抓到的 input_txt">The quick brown fox jumps over the lazy dog</textarea></div>
+      <div class="field"><label>期望 sign（可选，比对）</label><input id="h_expect" placeholder="hex"></div>
+      <div class="btnbar"><button class="act" id="h_run">计算 HMAC</button> <span id="h_match"></span></div>
+      <div class="field out" style="margin-top:10px"><label>HMAC（hex）</label><div class="val" id="h_hex"></div><button class="copy" data-copy="h_hex">复制</button></div>
+      <div class="field out"><label>HMAC（Base64）</label><div class="val" id="h_b64"></div><button class="copy" data-copy="h_b64">复制</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Base64 / Hex 小工具</h2>
+      <div class="two">
+        <div>
+          <h3>标准 Base64</h3>
+          <div class="field"><textarea id="b_text" placeholder="文本">hello</textarea></div>
+          <div class="btnbar"><button class="ghost" id="b_enc">文本→Base64</button><button class="ghost" id="b_dec">Base64→文本</button></div>
+          <div class="field out"><div class="val" id="b_out"></div><button class="copy" data-copy="b_out">复制</button></div>
+        </div>
+        <div>
+          <h3>Hex ↔ 文本（UTF-8）</h3>
+          <div class="field"><textarea id="x_text" placeholder="文本或 hex">hello</textarea></div>
+          <div class="btnbar"><button class="ghost" id="x_enc">文本→Hex</button><button class="ghost" id="x_dec">Hex→文本</button></div>
+          <div class="field out"><div class="val" id="x_out"></div><button class="copy" data-copy="x_out">复制</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="hint" style="margin-top:20px">仅供个人研究 / 自用自己账号设备。本工具不内置任何真实密钥或设备指纹；所有输入只在浏览器内本地计算。</p>
+</div>
+
+<!-- ===================== CORE LIBRARY (pure JS, offline, testable) ===================== -->
+<script id="jdt-core">
+(function(g){
+  "use strict";
+  var enc = new TextEncoder();
+  var dec = new TextDecoder("utf-8");
+  function utf8(s){ return enc.encode(s); }
+  function fromUtf8(b){ return dec.decode(b); }
+  function bytesToHex(b){ var s=""; for(var i=0;i<b.length;i++){ s+=(b[i]>>>4).toString(16)+(b[i]&15).toString(16); } return s; }
+  function hexToBytes(h){ h=String(h).replace(/[^0-9a-fA-F]/g,""); if(h.length%2)throw new Error("hex 长度必须为偶数"); var o=new Uint8Array(h.length/2); for(var i=0;i<o.length;i++)o[i]=parseInt(h.substr(i*2,2),16); return o; }
+  function concat(a,b){ var o=new Uint8Array(a.length+b.length); o.set(a,0); o.set(b,a.length); return o; }
+  function rotr(x,n){ return (x>>>n)|(x<<(32-n)); }
+
+  // -------- MD5 (Uint8Array -> Uint8Array(16)) --------
+  var MD5_K = new Uint32Array([
+    0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
+    0x698098d8,0x8b44f7af,0xffff5bb1,0x895cd7be,0x6b901122,0xfd987193,0xa679438e,0x49b40821,
+    0xf61e2562,0xc040b340,0x265e5a51,0xe9b6c7aa,0xd62f105d,0x02441453,0xd8a1e681,0xe7d3fbc8,
+    0x21e1cde6,0xc33707d6,0xf4d50d87,0x455a14ed,0xa9e3e905,0xfcefa3f8,0x676f02d9,0x8d2a4c8a,
+    0xfffa3942,0x8771f681,0x6d9d6122,0xfde5380c,0xa4beea44,0x4bdecfa9,0xf6bb4b60,0xbebfbc70,
+    0x289b7ec6,0xeaa127fa,0xd4ef3085,0x04881d05,0xd9d4d039,0xe6db99e5,0x1fa27cf8,0xc4ac5665,
+    0xf4292244,0x432aff97,0xab9423a7,0xfc93a039,0x655b59c3,0x8f0ccc92,0xffeff47d,0x85845dd1,
+    0x6fa87e4f,0xfe2ce6e0,0xa3014314,0x4e0811a1,0xf7537e82,0xbd3af235,0x2ad7d2bb,0xeb86d391]);
+  var MD5_S = [7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,
+               5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
+               4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
+               6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21];
+  function md5(msg){
+    var len=msg.length, bitLen=len*8;
+    var total=(((len+8)>>>6)+1)<<6;
+    var m=new Uint8Array(total); m.set(msg); m[len]=0x80;
+    var dv=new DataView(m.buffer);
+    dv.setUint32(total-8, bitLen>>>0, true);
+    dv.setUint32(total-4, (Math.floor(bitLen/4294967296))>>>0, true);
+    var a0=0x67452301,b0=0xefcdab89,c0=0x98badcfe,d0=0x10325476, M=new Uint32Array(16);
+    for(var off=0; off<total; off+=64){
+      for(var i=0;i<16;i++) M[i]=dv.getUint32(off+i*4,true);
+      var A=a0,B=b0,C=c0,D=d0;
+      for(i=0;i<64;i++){
+        var F,gI;
+        if(i<16){ F=(B&C)|((~B)&D); gI=i; }
+        else if(i<32){ F=(D&B)|((~D)&C); gI=(5*i+1)&15; }
+        else if(i<48){ F=B^C^D; gI=(3*i+5)&15; }
+        else { F=C^(B|(~D)); gI=(7*i)&15; }
+        F=(F+A+MD5_K[i]+M[gI])|0;
+        A=D; D=C; C=B;
+        B=(B+((F<<MD5_S[i])|(F>>>(32-MD5_S[i]))))|0;
+      }
+      a0=(a0+A)|0; b0=(b0+B)|0; c0=(c0+C)|0; d0=(d0+D)|0;
+    }
+    var out=new Uint8Array(16), odv=new DataView(out.buffer);
+    odv.setUint32(0,a0>>>0,true); odv.setUint32(4,b0>>>0,true);
+    odv.setUint32(8,c0>>>0,true); odv.setUint32(12,d0>>>0,true);
+    return out;
+  }
+
+  // -------- SHA-1 (Uint8Array -> Uint8Array(20)) --------
+  function sha1(msg){
+    var len=msg.length, bitLen=len*8;
+    var total=(((len+8)>>>6)+1)<<6;
+    var m=new Uint8Array(total); m.set(msg); m[len]=0x80;
+    var dv=new DataView(m.buffer);
+    dv.setUint32(total-8,(Math.floor(bitLen/4294967296))>>>0,false);
+    dv.setUint32(total-4,bitLen>>>0,false);
+    var h0=0x67452301,h1=0xEFCDAB89,h2=0x98BADCFE,h3=0x10325476,h4=0xC3D2E1F0, w=new Uint32Array(80);
+    for(var off=0; off<total; off+=64){
+      for(var i=0;i<16;i++) w[i]=dv.getUint32(off+i*4,false);
+      for(i=16;i<80;i++){ var v=w[i-3]^w[i-8]^w[i-14]^w[i-16]; w[i]=(v<<1)|(v>>>31); }
+      var a=h0,b=h1,c=h2,d=h3,e=h4;
+      for(i=0;i<80;i++){
+        var f,k;
+        if(i<20){ f=(b&c)|((~b)&d); k=0x5A827999; }
+        else if(i<40){ f=b^c^d; k=0x6ED9EBA1; }
+        else if(i<60){ f=(b&c)|(b&d)|(c&d); k=0x8F1BBCDC; }
+        else { f=b^c^d; k=0xCA62C1D6; }
+        var t=(((a<<5)|(a>>>27))+f+e+k+w[i])|0;
+        e=d; d=c; c=(b<<30)|(b>>>2); b=a; a=t;
+      }
+      h0=(h0+a)|0;h1=(h1+b)|0;h2=(h2+c)|0;h3=(h3+d)|0;h4=(h4+e)|0;
+    }
+    var out=new Uint8Array(20), odv=new DataView(out.buffer);
+    odv.setUint32(0,h0>>>0,false);odv.setUint32(4,h1>>>0,false);odv.setUint32(8,h2>>>0,false);
+    odv.setUint32(12,h3>>>0,false);odv.setUint32(16,h4>>>0,false);
+    return out;
+  }
+
+  // -------- SHA-256 (Uint8Array -> Uint8Array(32)) --------
+  var SHA256_K=new Uint32Array([
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+  function sha256(msg){
+    var len=msg.length, bitLen=len*8;
+    var total=(((len+8)>>>6)+1)<<6;
+    var m=new Uint8Array(total); m.set(msg); m[len]=0x80;
+    var dv=new DataView(m.buffer);
+    dv.setUint32(total-8,(Math.floor(bitLen/4294967296))>>>0,false);
+    dv.setUint32(total-4,bitLen>>>0,false);
+    var h0=0x6a09e667,h1=0xbb67ae85,h2=0x3c6ef372,h3=0xa54ff53a,h4=0x510e527f,h5=0x9b05688c,h6=0x1f83d9ab,h7=0x5be0cd19;
+    var w=new Uint32Array(64);
+    for(var off=0; off<total; off+=64){
+      for(var i=0;i<16;i++) w[i]=dv.getUint32(off+i*4,false);
+      for(i=16;i<64;i++){
+        var s0=rotr(w[i-15],7)^rotr(w[i-15],18)^(w[i-15]>>>3);
+        var s1=rotr(w[i-2],17)^rotr(w[i-2],19)^(w[i-2]>>>10);
+        w[i]=(w[i-16]+s0+w[i-7]+s1)|0;
+      }
+      var a=h0,b=h1,c=h2,d=h3,e=h4,f=h5,gg=h6,h=h7;
+      for(i=0;i<64;i++){
+        var S1=rotr(e,6)^rotr(e,11)^rotr(e,25);
+        var ch=(e&f)^((~e)&gg);
+        var t1=(h+S1+ch+SHA256_K[i]+w[i])|0;
+        var S0=rotr(a,2)^rotr(a,13)^rotr(a,22);
+        var maj=(a&b)^(a&c)^(b&c);
+        var t2=(S0+maj)|0;
+        h=gg;gg=f;f=e;e=(d+t1)|0;d=c;c=b;b=a;a=(t1+t2)|0;
+      }
+      h0=(h0+a)|0;h1=(h1+b)|0;h2=(h2+c)|0;h3=(h3+d)|0;h4=(h4+e)|0;h5=(h5+f)|0;h6=(h6+gg)|0;h7=(h7+h)|0;
+    }
+    var out=new Uint8Array(32), odv=new DataView(out.buffer), hs=[h0,h1,h2,h3,h4,h5,h6,h7];
+    for(i=0;i<8;i++) odv.setUint32(i*4,hs[i]>>>0,false);
+    return out;
+  }
+
+  // -------- HMAC --------
+  function hmacRaw(hashFn, blockSize, key, msg){
+    var k=key; if(k.length>blockSize) k=hashFn(k);
+    var kp=new Uint8Array(blockSize); kp.set(k);
+    var ipad=new Uint8Array(blockSize), opad=new Uint8Array(blockSize);
+    for(var i=0;i<blockSize;i++){ ipad[i]=kp[i]^0x36; opad[i]=kp[i]^0x5c; }
+    return hashFn(concat(opad, hashFn(concat(ipad, msg))));
+  }
+  function hmacSha1(key,msg){ return hmacRaw(sha1,64,key,msg); }
+  function hmacSha256(key,msg){ return hmacRaw(sha256,64,key,msg); }
+
+  // -------- standard base64 (bytes -> str) --------
+  var STDB64="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  function bytesToB64(bytes, alphabet, pad){
+    alphabet=alphabet||STDB64; pad=(pad!==false);
+    var out="", i, n;
+    for(i=0; i+3<=bytes.length; i+=3){
+      n=(bytes[i]<<16)|(bytes[i+1]<<8)|bytes[i+2];
+      out+=alphabet[(n>>>18)&63]+alphabet[(n>>>12)&63]+alphabet[(n>>>6)&63]+alphabet[n&63];
+    }
+    var rem=bytes.length-i;
+    if(rem===1){ n=bytes[i]<<16; out+=alphabet[(n>>>18)&63]+alphabet[(n>>>12)&63]; if(pad)out+="=="; }
+    else if(rem===2){ n=(bytes[i]<<16)|(bytes[i+1]<<8); out+=alphabet[(n>>>18)&63]+alphabet[(n>>>12)&63]+alphabet[(n>>>6)&63]; if(pad)out+="="; }
+    return out;
+  }
+  function b64ToBytes(str, alphabet){
+    alphabet=alphabet||STDB64;
+    var inv={}; for(var j=0;j<64;j++) inv[alphabet[j]]=j;
+    var out=[], buffer=0, bits=0;
+    for(var i=0;i<str.length;i++){
+      var ch=str[i]; if(ch==="=" ) continue; var v=inv[ch]; if(v===undefined) continue;
+      buffer=((buffer<<6)|v)&0xFFFFFF; bits+=6;
+      if(bits>=8){ bits-=8; out.push((buffer>>bits)&0xFF); }
+    }
+    return new Uint8Array(out);
+  }
+
+  // -------- ciphertype:5 (custom-alphabet base64) --------
+  var C5_ALPHABET="KLMNOPQRSTABCDEFGHIJUVWXYZabcdopqrstuvwxefghijklmnyz0123456789+/";
+  var C5_INV={}; for(var ci=0; ci<C5_ALPHABET.length; ci++) C5_INV[C5_ALPHABET[ci]]=ci;
+  function c5decode(text){
+    var out=[], buffer=0, bits=0;
+    for(var i=0;i<text.length;i++){
+      var ch=text[i], code=text.charCodeAt(i), v=C5_INV[ch];
+      if(ch==="="||code>=128||v===undefined) continue;
+      buffer=((buffer<<6)|v)&0xFFFFFF; bits+=6;
+      if(bits>=8){ bits-=8; out.push((buffer>>bits)&0xFF); }
+    }
+    return new Uint8Array(out);
+  }
+  function c5encode(bytes){
+    var out="", buffer=0, bits=0;
+    for(var i=0;i<bytes.length;i++){
+      buffer=((buffer<<8)|bytes[i])&0xFFFFFF; bits+=8;
+      while(bits>=6){ bits-=6; out+=C5_ALPHABET[(buffer>>bits)&0x3F]; }
+    }
+    if(bits>0) out+=C5_ALPHABET[(buffer<<(6-bits))&0x3F];
+    while(out.length%4!==0) out+="=";
+    return out;
+  }
+  function c5decStr(text){ return fromUtf8(c5decode(text)); }
+  function c5encStr(text){ return c5encode(utf8(text)); }
+
+  // -------- 彩虹网关 query sign --------
+  var COLOR_DEVICE_KEYS=["aid","appid","area","build","client","clientVersion","d_brand",
+    "d_model","eid","ext","networkType","osVersion","partner","screen","uuid"];
+  var COLOR_REQ_KEYS=["functionId","body","t"];
+  var COLOR_ALL_KEYS=COLOR_DEVICE_KEYS.concat(COLOR_REQ_KEYS).slice().sort();
+  function buildColorPreimage(fields){
+    var missing=[]; for(var i=0;i<COLOR_ALL_KEYS.length;i++){ if(!(COLOR_ALL_KEYS[i] in fields)) missing.push(COLOR_ALL_KEYS[i]); }
+    if(missing.length) throw new Error("缺少字段: "+missing.join(", "));
+    var keys=Object.keys(fields).sort();
+    return keys.map(function(k){ return String(fields[k]); }).join("&");
+  }
+  function colorSign(preimage, secret){ return bytesToHex(hmacSha256(utf8(secret), utf8(preimage))); }
+
+  // -------- ep/body 信封 --------
+  function decodeEnvelope(raw){
+    var txt=String(raw).trim();
+    if(/%[0-9a-fA-F]{2}/.test(txt) && txt.indexOf("{")!==0){ try{ txt=decodeURIComponent(txt); }catch(e){} }
+    // strip leading "ep=" / "body=" if present
+    txt=txt.replace(/^(ep|body)=/,"");
+    if(txt.indexOf("{")!==0){ try{ txt=decodeURIComponent(txt); }catch(e){} }
+    var obj=JSON.parse(txt);
+    var cipher=obj.cipher||{}, decoded={};
+    Object.keys(cipher).forEach(function(k){
+      var v=cipher[k];
+      decoded[k]= (typeof v==="string") ? c5decStr(v) : v;
+    });
+    return {meta:{hdid:obj.hdid,ts:obj.ts,ridx:obj.ridx,ciphertype:obj.ciphertype,version:obj.version,appname:obj.appname}, cipher:cipher, decoded:decoded};
+  }
+  function buildEnvelope(opts){
+    var cipher={}; var fields=opts.fields||{};
+    Object.keys(fields).forEach(function(k){
+      var v=fields[k];
+      cipher[k]= c5encStr(typeof v==="string"? v : JSON.stringify(v));
+    });
+    var env={
+      hdid: opts.hdid||"",
+      ts: (opts.ts==null||opts.ts==="")? Date.now() : Number(opts.ts),
+      ridx: (opts.ridx==null||opts.ridx==="")? 1 : Number(opts.ridx),
+      cipher: cipher,
+      ciphertype: (opts.ciphertype==null||opts.ciphertype==="")? 5 : Number(opts.ciphertype),
+      version: opts.version||"1.2.0",
+      appname: opts.appname||"com.jd.iots"
+    };
+    return env;
+  }
+
+  // -------- 旧接口 HmacSHA1 --------
+  function dayOfYearUtc8(now){
+    var t=(now? now.getTime() : Date.now())+8*3600*1000;
+    var d=new Date(t);
+    var y=d.getUTCFullYear();
+    var diff=Date.UTC(y,d.getUTCMonth(),d.getUTCDate())-Date.UTC(y,0,1);
+    return Math.floor(diff/86400000)+1;
+  }
+  function oldNowTs(now){
+    var t=(now? now.getTime() : Date.now())+8*3600*1000;
+    var d=new Date(t), p=function(n,l){ n=String(n); while(n.length<(l||2)) n="0"+n; return n; };
+    return d.getUTCFullYear()+"-"+p(d.getUTCMonth()+1)+"-"+p(d.getUTCDate())+"T"+
+           p(d.getUTCHours())+":"+p(d.getUTCMinutes())+":"+p(d.getUTCSeconds())+"."+p(d.getUTCMilliseconds(),3)+"Z";
+  }
+  function oldDeviceMd(appVersion, hardPlatform, platVersion, doy){
+    if(doy==null) doy=dayOfYearUtc8();
+    return bytesToHex(md5(utf8("Android"+appVersion+hardPlatform+platVersion+":"+doy)));
+  }
+  function oldBuildBody(feedId){ return '{"json":{"feed_id":'+feedId+',"version":"2.0","digest":""}}'; }
+  function oldSign(o){
+    var tag=o.tag||"postjson_body";
+    var deviceMd=o.deviceMd || oldDeviceMd(o.appVersion,o.hardPlatform,o.platVersion, o.doy);
+    var body=(o.body!=null)? o.body : oldBuildBody(o.feedId);
+    var message=deviceMd+tag+body+o.ts+o.seg1+deviceMd;
+    var mac=hmacSha1(utf8(o.key), utf8(message));
+    var seg2=bytesToB64(mac);
+    return {deviceMd:deviceMd, body:body, message:message, seg2:seg2, authorization:"smart "+o.seg1+":::"+seg2+":::"+o.ts};
+  }
+
+  g.JDT={
+    utf8:utf8, fromUtf8:fromUtf8, bytesToHex:bytesToHex, hexToBytes:hexToBytes,
+    md5:md5, sha1:sha1, sha256:sha256, hmacRaw:hmacRaw, hmacSha1:hmacSha1, hmacSha256:hmacSha256,
+    bytesToB64:bytesToB64, b64ToBytes:b64ToBytes, STDB64:STDB64,
+    C5_ALPHABET:C5_ALPHABET, c5decode:c5decode, c5encode:c5encode, c5decStr:c5decStr, c5encStr:c5encStr,
+    COLOR_DEVICE_KEYS:COLOR_DEVICE_KEYS, COLOR_ALL_KEYS:COLOR_ALL_KEYS,
+    buildColorPreimage:buildColorPreimage, colorSign:colorSign,
+    decodeEnvelope:decodeEnvelope, buildEnvelope:buildEnvelope,
+    dayOfYearUtc8:dayOfYearUtc8, oldNowTs:oldNowTs, oldDeviceMd:oldDeviceMd, oldBuildBody:oldBuildBody, oldSign:oldSign,
+    // convenience: hash text -> hex
+    md5Hex:function(s){return bytesToHex(md5(utf8(s)));},
+    sha1Hex:function(s){return bytesToHex(sha1(utf8(s)));},
+    sha256Hex:function(s){return bytesToHex(sha256(utf8(s)));}
+  };
+})(typeof globalThis!=="undefined"? globalThis : this);
+</script>
+
+<!-- ===================== UI ===================== -->
+<script>
+(function(){
+  var J=window.JDT;
+  var $=function(id){ return document.getElementById(id); };
+  function val(id){ var el=$(id); return el? el.value : ""; }
+  function setText(id,s){ var el=$(id); if(el) el.textContent=s; }
+  function setVal(id,s){ var el=$(id); if(el) el.value=s; }
+  function show(id,s){ var el=$(id); if(el) el.textContent=s||""; }
+  function badge(id, ok, okText, badText){
+    var el=$(id); if(!el) return;
+    el.className="badge "+(ok?"ok":"bad"); el.textContent=ok? (okText||"match ✓") : (badText||"不一致 ✗");
+  }
+
+  // tabs
+  document.querySelectorAll("#tabs button").forEach(function(b){
+    b.addEventListener("click", function(){
+      document.querySelectorAll("#tabs button").forEach(function(x){x.classList.remove("active");});
+      document.querySelectorAll(".panel").forEach(function(x){x.classList.remove("active");});
+      b.classList.add("active");
+      $("tab-"+b.dataset.tab).classList.add("active");
+    });
+  });
+
+  // copy buttons
+  document.addEventListener("click", function(e){
+    var t=e.target;
+    if(t.classList && t.classList.contains("copy")){
+      var src=$(t.dataset.copy); if(!src) return;
+      var text=("value" in src && src.tagName!=="DIV")? src.value : src.textContent;
+      copyText(text, t);
+    }
+  });
+  function copyText(text, btn){
+    var done=function(){ var o=btn.textContent; btn.textContent="已复制"; setTimeout(function(){btn.textContent=o;},900); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done, function(){ fallback(); });
+    } else fallback();
+    function fallback(){
+      var ta=document.createElement("textarea"); ta.value=text; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand("copy"); done(); }catch(e){} document.body.removeChild(ta);
+    }
+  }
+
+  // ---------- 彩虹 sign ----------
+  $("c_secret_toggle").addEventListener("click", function(){
+    var el=$("c_secret"); if(el.type==="password"){ el.type="text"; this.textContent="隐藏"; } else { el.type="password"; this.textContent="显示"; }
+  });
+  $("c_secret").type="password";
+  $("c_t_now").addEventListener("click", function(){ setVal("c_t", String(Date.now())); });
+  $("c_ep_parse").addEventListener("click", function(){
+    show("c_ep_err","");
+    try{
+      var r=J.decodeEnvelope(val("c_ep"));
+      var d=r.decoded, map={aid:"c_aid",appid:"c_appid",area:"c_area",build:"c_build",client:"c_client",
+        clientVersion:"c_clientVersion",d_brand:"c_d_brand",d_model:"c_d_model",eid:"c_eid",ext:"c_ext",
+        networkType:"c_networkType",osVersion:"c_osVersion",partner:"c_partner",screen:"c_screen"};
+      Object.keys(map).forEach(function(k){ if(d[k]!=null) setVal(map[k], d[k]); });
+      if(d.aid!=null){ setVal("c_aid", d.aid); setVal("c_uuid", d.aid); }
+      show("c_ep_err","已填入 "+Object.keys(r.decoded).length+" 个字段。");
+    }catch(e){ show("c_ep_err","解析失败："+e.message); }
+  });
+  $("c_run").addEventListener("click", function(){
+    show("c_err",""); setText("c_sign",""); setVal("c_preimage",""); $("c_match").textContent="";
+    try{
+      var secret=val("c_secret").trim();
+      if(!secret){ show("c_err","请填 secret（32 字符）。"); return; }
+      var aid=val("c_aid").trim(), uuid=val("c_uuid").trim()||aid;
+      var t=val("c_t").trim()||String(Date.now()); setVal("c_t", t);
+      var fields={
+        aid:aid, appid:val("c_appid").trim(), area:val("c_area").trim(), build:val("c_build").trim(),
+        client:val("c_client").trim(), clientVersion:val("c_clientVersion").trim(), d_brand:val("c_d_brand").trim(),
+        d_model:val("c_d_model").trim(), eid:val("c_eid").trim(), ext:val("c_ext"), networkType:val("c_networkType").trim(),
+        osVersion:val("c_osVersion").trim(), partner:val("c_partner").trim(), screen:val("c_screen").trim(), uuid:uuid,
+        functionId:val("c_functionId").trim(), body:val("c_body"), t:t
+      };
+      var pre=J.buildColorPreimage(fields);
+      var sig=J.colorSign(pre, secret);
+      setVal("c_preimage", pre); setText("c_sign", sig);
+      var exp=val("c_expect").trim();
+      if(exp) badge("c_match", sig.toLowerCase()===exp.toLowerCase());
+    }catch(e){ show("c_err", e.message); }
+  });
+
+  // ---------- codec ----------
+  $("dec_run").addEventListener("click", function(){
+    try{ var b=J.c5decode(val("dec_in")); setText("dec_out", J.fromUtf8(b)); show("dec_hex", J.bytesToHex(b)); }
+    catch(e){ setText("dec_out","错误："+e.message); }
+  });
+  $("enc_run").addEventListener("click", function(){
+    try{ var s=J.c5encStr(val("enc_in")); setText("enc_out", s);
+      var rt=J.fromUtf8(J.c5decode(s))===val("enc_in"); var el=$("enc_rt"); el.className="badge "+(rt?"ok":"bad"); el.textContent=rt?"通过 ✓":"失败 ✗"; }
+    catch(e){ setText("enc_out","错误："+e.message); }
+  });
+  $("env_run").addEventListener("click", function(){
+    show("env_err",""); var tb=$("env_tbl").querySelector("tbody"); tb.innerHTML=""; $("env_tbl").style.display="none"; setText("env_meta","");
+    try{
+      var r=J.decodeEnvelope(val("env_in")), m=r.meta;
+      setText("env_meta", "hdid="+(m.hdid||"")+"  ts="+(m.ts||"")+"  ridx="+(m.ridx==null?"":m.ridx)+"  ciphertype="+(m.ciphertype||"")+"  version="+(m.version||"")+"  appname="+(m.appname||""));
+      Object.keys(r.cipher).forEach(function(k){
+        var tr=document.createElement("tr");
+        tr.innerHTML="<td class='k'>"+esc(k)+"</td><td class='v'>"+esc(String(r.cipher[k]))+"</td><td class='v'>"+esc(String(r.decoded[k]))+"</td>";
+        tb.appendChild(tr);
+      });
+      $("env_tbl").style.display="";
+    }catch(e){ show("env_err","解析失败："+e.message); }
+  });
+  $("bld_ts_now").addEventListener("click", function(){ setVal("bld_ts", String(Date.now())); });
+  $("bld_run").addEventListener("click", function(){
+    show("bld_err",""); setVal("bld_json",""); setVal("bld_form","");
+    try{
+      var fields=JSON.parse(val("bld_fields"));
+      var env=J.buildEnvelope({
+        fields:fields, hdid:val("bld_hdid").trim(), ts:val("bld_ts").trim(), ridx:val("bld_ridx").trim(),
+        ciphertype:val("bld_ct").trim(), version:val("bld_ver").trim(), appname:val("bld_app").trim()
+      });
+      var js=JSON.stringify(env);
+      setVal("bld_json", JSON.stringify(env,null,2));
+      setVal("bld_form", encodeURIComponent(js));
+    }catch(e){ show("bld_err","构造失败（fields 必须是合法 JSON 对象）："+e.message); }
+  });
+
+  // ---------- 旧接口 ----------
+  $("o_ts_now").addEventListener("click", function(){ setVal("o_ts", J.oldNowTs()); });
+  $("o_run").addEventListener("click", function(){
+    show("o_err","");
+    try{
+      var key=val("o_key"); if(!key){ show("o_err","请填 key（HmacSHA1 密钥）。"); return; }
+      var seg1=val("o_seg1").trim(); if(!seg1){ show("o_err","请填 seg1。"); return; }
+      var ts=val("o_ts").trim()||J.oldNowTs(); setVal("o_ts", ts);
+      var bodyOv=val("o_body_ov").trim(), dmdOv=val("o_dmd_ov").trim();
+      var feed=val("o_feed").trim();
+      if(!bodyOv && !feed){ show("o_err","填 feed_id 或手动覆盖 body。"); return; }
+      var r=J.oldSign({
+        key:key, seg1:seg1, appVersion:val("o_appv").trim(), hardPlatform:val("o_hard").trim(),
+        platVersion:val("o_plat").trim(), feedId:feed, body:bodyOv||null, deviceMd:dmdOv||null, ts:ts
+      });
+      setText("o_dmd", r.deviceMd); setText("o_body", r.body); setVal("o_msg", r.message);
+      setText("o_seg2", r.seg2); setText("o_auth", r.authorization);
+    }catch(e){ show("o_err", e.message); }
+  });
+
+  // ---------- lab: 哈希 ----------
+  function labInputBytes(){
+    var mode=document.querySelector("input[name=l_mode]:checked").value;
+    var s=val("l_input");
+    return mode==="hex"? J.hexToBytes(s) : J.utf8(s);
+  }
+  function labHash(){
+    try{
+      var b=labInputBytes();
+      setText("l_md5", J.bytesToHex(J.md5(b)));
+      setText("l_sha1", J.bytesToHex(J.sha1(b)));
+      setText("l_sha256", J.bytesToHex(J.sha256(b)));
+    }catch(e){ setText("l_md5","错误："+e.message); setText("l_sha1",""); setText("l_sha256",""); }
+  }
+  $("l_input").addEventListener("input", labHash);
+  document.querySelectorAll("input[name=l_mode]").forEach(function(r){ r.addEventListener("change", labHash); });
+
+  // ---------- lab: HMAC ----------
+  $("h_run").addEventListener("click", function(){
+    $("h_match").textContent="";
+    try{
+      var keymode=document.querySelector("input[name=h_keymode]:checked").value;
+      var key= keymode==="hex"? J.hexToBytes(val("h_key")) : J.utf8(val("h_key"));
+      var msg=J.utf8(val("h_msg"));
+      var mac= val("h_algo")==="sha1"? J.hmacSha1(key,msg) : J.hmacSha256(key,msg);
+      var hex=J.bytesToHex(mac);
+      setText("h_hex", hex); setText("h_b64", J.bytesToB64(mac));
+      var exp=val("h_expect").trim();
+      if(exp) badge("h_match", hex.toLowerCase()===exp.toLowerCase());
+    }catch(e){ setText("h_hex","错误："+e.message); setText("h_b64",""); }
+  });
+
+  // ---------- lab: base64 / hex ----------
+  $("b_enc").addEventListener("click", function(){ try{ setText("b_out", J.bytesToB64(J.utf8(val("b_text")))); }catch(e){ setText("b_out","错误："+e.message);} });
+  $("b_dec").addEventListener("click", function(){ try{ setText("b_out", J.fromUtf8(J.b64ToBytes(val("b_text")))); }catch(e){ setText("b_out","错误："+e.message);} });
+  $("x_enc").addEventListener("click", function(){ try{ setText("x_out", J.bytesToHex(J.utf8(val("x_text")))); }catch(e){ setText("x_out","错误："+e.message);} });
+  $("x_dec").addEventListener("click", function(){ try{ setText("x_out", J.fromUtf8(J.hexToBytes(val("x_text")))); }catch(e){ setText("x_out","错误："+e.message);} });
+
+  function esc(s){ return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
+
+  // init
+  labHash();
+  $("dec_run").click();
+})();
+</script>
+</body>
+</html>
