@@ -30,6 +30,8 @@
  *      重点取 token/tokenTime/tokenActTime（旧格式明文键）与 jade/jadeStamp/jadeVal/whisper（新格式，
  *      实际键名经 c() 混淆）。jade 以 jdd02 开头 => g.a(jade,whisper) 解出真 token；jdd01 开头 => 本身即明文 token。
  *      DUMP_BIO 定时自动读；也可 rpc 手动 dumpbio()。
+ *      另 hook of.g.a/.b(String,String,String)（jade 密文编解码壳）——运行时直接抓 g.a 的入参(jade/whisper)
+ *      与返回(明文 token)，与上面的持久化值相互印证（落 sign 表 kind=EID.ofg.a/.b）。
  *
  * 用法:
  *   python host.py -p <包名> -s frida_eid_capture.js --spawn        # 落库 + AUTO_MINT
@@ -40,6 +42,7 @@
 var BIOMETRIC_CANDIDATES = ['com.jd.sec.BiometricManager', 'com.jingdong.jdsdk.utils.BiometricManager'];
 var SEC_A_CLASS = 'com.jd.sec.a';   // scope=a.c(), pin=a.b()（混淆名，换版本可能变）
 var LOGO_CLASS = 'com.jd.sec.LogoManager';
+var OFG_CLASS = 'of.g';             // jade 密文编解码壳：静态 a/b(String,String,String)；p(ctx) 里 g.a(jade,whisper,"UTF-8") 解出真 token
 var HOOK_FILE_IO = false;           // 开后在 com.jd.sec 栈下打印文件读写路径（找 token 持久化文件）
 var AUTO_MINT = true;               // 启动后定时主动调 getLogo 现造 eid
 var AUTO_MINT_AT_MS = [4000, 9000, 16000, 30000];
@@ -280,9 +283,41 @@ Java.perform(function () {
         console.log('[eid] hooked FileInputStream/FileOutputStream（com.jd.sec 栈下打印 token 文件路径）');
     }
 
+    /* of.g：jade 密文编解码壳——static a/b(String,String,String)，抓入参+返回直接拿明文 token
+     *   p(ctx) 里 g.a(jade, whisper, "UTF-8") = 解出真 token（jade=jdd02密文, whisper=密钥料）
+     *   优先精确命中用户指定的 (String,String,String) 重载；缺则兜底 hook 该方法全部重载 */
+    function hookOfG() {
+        var G = safe(function () { return Java.use(OFG_CLASS); }, null);
+        if (!G) return false;
+        var hooked = 0;
+        ['a', 'b'].forEach(function (name) {
+            var fn = G[name];
+            if (!fn || !fn.overloads) return;
+            var exact = safe(function () { return fn.overload('java.lang.String', 'java.lang.String', 'java.lang.String'); }, null);
+            var targets = exact ? [exact] : fn.overloads;
+            targets.forEach(function (ov) {
+                ov.implementation = function () {
+                    var ret = ov.apply(this, arguments);
+                    try {
+                        var a = []; for (var i = 0; i < arguments.length; i++) a.push(clip('' + arguments[i], 120));
+                        var rs = (ret == null) ? null : ('' + ret);
+                        var st = once('ofg:' + name) ? stk() : null;
+                        console.log('\n[ofg] ' + OFG_CLASS + '.' + name + '(' + a.join(', ') + ')  ->  ' + clip(rs == null ? 'null' : rs, 120));
+                        if (st) console.log(st);
+                        emit({ kind: 'EID.ofg.' + name, input_txt: a.join(' | '), out_b64: rs, stack: st, matched: 1 });
+                    } catch (e) {}
+                    return ret;
+                };
+            });
+            hooked += targets.length;
+        });
+        if (hooked) console.log('[ofg] hooked ' + OFG_CLASS + '.a/.b x' + hooked + '（jade 密文编解码，抓明文 token）');
+        return hooked > 0;
+    }
+
     /* ---- 安装：晚加载自动重试 ---- */
     try { hookFileIO(); } catch (e) { console.log('[eid] fileIO 安装失败: ' + e); }
-    var bioDone = false, tries = 0;
+    var bioDone = false, ofgDone = false, tries = 0;
     (function attempt() {
         if (!bioDone) {
             for (var i = 0; i < BIOMETRIC_CANDIDATES.length && !bioDone; i++) {
@@ -291,7 +326,8 @@ Java.perform(function () {
                 if (BM && safe(function () { return hookBiometric(cls, BM); }, false)) bioDone = true;
             }
         }
-        if (!bioDone && ++tries <= RETRY_MAX) { setTimeout(function () { Java.perform(attempt); }, RETRY_MS); return; }
+        if (!ofgDone) ofgDone = safe(function () { return hookOfG(); }, false);
+        if ((!bioDone || !ofgDone) && ++tries <= RETRY_MAX) { setTimeout(function () { Java.perform(attempt); }, RETRY_MS); return; }
         if (!bioDone) {
             console.log('[eid] 未命中 BiometricManager 候选，枚举 *BiometricManager* 供你填 BIOMETRIC_CANDIDATES：');
             Java.enumerateLoadedClasses({
@@ -299,6 +335,7 @@ Java.perform(function () {
                 onComplete: function () { }
             });
         }
+        if (!ofgDone) console.log('[ofg] 未解析 ' + OFG_CLASS + '（换版本可能改名；可 frida 里枚举 of.* 候选后改 OFG_CLASS）');
     })();
 
     if (AUTO_MINT) {
