@@ -48,9 +48,68 @@ function hitOf(v) {
   return null;
 }
 
+/* wjlogin 登录态(WUserSigInfo)读写追踪 —— 所有 frida_*.js 内置（见 REVERSE_ENGINEERING.md §5.6）
+ * createUserInfoFromJSON(读/初始化) + toJSONObject(写/落盘)，两者 dump 调用栈看更新机制。落 sign 表(kind=WUserSig.*)。
+ * 注意：放在 TARGETS 早退之前调用，所以即便没填 TARGETS 也照常抓登录态读写。 */
+var WJ_DONE = false;
+function installWjloginHook() {
+  var CLS = "jd.wjlogin_sdk.model.WUserSigInfo";
+  var Throwable = Java.use("java.lang.Throwable");
+  var Log = Java.use("android.util.Log");
+  function stk() { try { return Log.getStackTraceString(Throwable.$new()); } catch (e) { return "(no stack)"; } }
+  function clip2(s, n) { s = "" + s; return s.length > n ? s.substring(0, n) + "..(+" + (s.length - n) + "B)" : s; }
+  var seen = {};
+  function dump(op, json) {
+    var s = stk(), sig = s.split("\n").slice(0, 8).join("|"), first = !seen[sig];
+    if (first) seen[sig] = 1;
+    console.log("\n########## wjlogin " + op + " ##########");
+    console.log(" json = " + (json == null ? "null" : clip2(json, 1400)));
+    if (first) { console.log(s); console.log(" ↑ 紧贴 jd.wjlogin_sdk 之前的 App 帧 = 触发读/写处（更新机制看这里）"); }
+    else console.log(" (调用栈同前次，省略)");
+    console.log("############################################\n");
+    try { send({ type: "sign", data: { kind: "WUserSig." + op, input_txt: json, stack: s, matched: 1 } }); } catch (e) {}
+  }
+  function doHook(W) {
+    if (WJ_DONE) return; WJ_DONE = true;
+    var m1 = W.createUserInfoFromJSON;
+    if (m1 && m1.overloads) {
+      m1.overloads.forEach(function (ov) {
+        ov.implementation = function () {
+          var json = null; try { if (arguments.length && arguments[0]) json = "" + arguments[0].toString(); } catch (e) {}
+          var ret = ov.apply(this, arguments);
+          dump("createUserInfoFromJSON(读/初始化)", json);
+          return ret;
+        };
+      });
+      console.log("[wjlogin] hooked " + CLS + ".createUserInfoFromJSON x" + m1.overloads.length);
+    } else console.log("[wjlogin] 未找到 createUserInfoFromJSON 方法（版本差异？）");
+    var m2 = W.toJSONObject;
+    if (m2 && m2.overloads) {
+      m2.overloads.forEach(function (ov) {
+        ov.implementation = function () {
+          var ret = ov.apply(this, arguments);
+          var json = null; try { if (ret) json = "" + ret.toString(); } catch (e) {}
+          dump("toJSONObject(写/落盘)", json);
+          return ret;
+        };
+      });
+      console.log("[wjlogin] hooked " + CLS + ".toJSONObject x" + m2.overloads.length);
+    } else console.log("[wjlogin] 未找到 toJSONObject 方法（版本差异？）");
+  }
+  var tries = 0, MAX = 30;
+  (function attempt() {
+    if (WJ_DONE) return;
+    var W = null; try { W = Java.use(CLS); } catch (e) { W = null; }
+    if (W) { doHook(W); return; }
+    if (++tries <= MAX) setTimeout(function () { Java.perform(attempt); }, 700);
+    else console.log("[wjlogin] 放弃：" + CLS + " 一直未加载（该版本可能未集成 wjlogin / 改名）");
+  })();
+}
+
 Java.perform(function () {
+  try { installWjloginHook(); } catch (e) { console.log("[!] wjlogin hook 安装失败: " + e); }
   if (!TARGETS.length) {
-    console.log("[trace-src] 先填 TARGETS（你的 device_md），否则没目标可追。");
+    console.log("[trace-src] 先填 TARGETS（你的 device_md），否则没目标可追（但 wjlogin 登录态读写照常抓）。");
     return;
   }
   var Throwable = Java.use("java.lang.Throwable");

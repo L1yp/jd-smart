@@ -259,8 +259,30 @@ RestClient.postJson                       (com.jd.smart.base.net.http.RestClient
 - `http` 表：`ts/method/url/host/path/has_auth/has_tgt/code/req_headers/req_body/resp_headers/resp_body`
   ——抓包全量，按 `has_auth`/`has_tgt`/`url` 建索引，方便筛"带鉴权头的设备请求"。
 - `sign` 表：`kind/algorithm/input_hex/input_txt/out_hex/out_b64/key_hex/key_txt/iv_hex/matched/target/stack`
-  ——每次 crypto 调用一条；`kind` 形如 `Mac.doFinal`/`MD.digest`/`*.Base64.*`/`Mac.init`/`SECRET@...`/`SRC@...`。
+  ——每次 crypto 调用一条；`kind` 形如 `Mac.doFinal`/`MD.digest`/`*.Base64.*`/`Mac.init`/`SECRET@...`/`SRC@...`/`WUserSig.*`。
   把 `TARGETS` 填成要找的 `seg1`/`seg2`，命中即 `matched=1` 并带调用栈，直接 SQL 反查。
+
+### 5.6 wjlogin 登录态（WUserSigInfo）读写追踪（所有 frida_*.js 内置）
+
+`tgt` / 登录票据由京东 wjlogin SDK 的 `jd.wjlogin_sdk.model.WUserSigInfo` 持有。**6 个 frida_*.js
+全部内置** `installWjloginHook()`，开箱即抓登录态的**读**与**写**两个口子：
+
+- `createUserInfoFromJSON(JSONObject)`：从 JSON 反序列化出 `WUserSigInfo` —— **读 / 初始化**
+  （登录成功后、或进程启动从磁盘恢复登录态时）。入参 JSON = 即将载入内存的整份登录态，看它从哪来。
+- `toJSONObject()`：把 `WUserSigInfo` 序列化成 JSON —— **写**（大概率落盘前）。返回的 JSON =
+  即将持久化的整份登录态。
+
+两者都 **dump 调用栈**（这是要点，所以专门 hook）：栈里紧贴 `jd.wjlogin_sdk` 之前的 App 帧 =
+触发读/写的地方，顺它就看清「**更新机制**」——比如 token 刷新后是谁调用 `toJSONObject` 把新
+`tgt`/`a2` 写回磁盘。同一调用栈只打印一次（去重降噪），但每次调用都入库。
+
+- 落库：命中走 `sign` 表，`kind` 形如 `WUserSig.toJSONObject(写/落盘)` /
+  `WUserSig.createUserInfoFromJSON(读/初始化)`；整份 JSON 存 `input_txt`、调用栈存 `stack`。
+  `host.py` 控制台另打 `[WJLOGIN] …` 一行便于扫。
+- 时机：`--spawn` 早期该类可能尚未加载，hook 自带**重试**（每 0.7s，最多 ~21s）直到加载或超时；
+  想抓「进程启动从磁盘恢复」那一次务必 `--spawn`（attach 会错过启动期的读）。
+
+> 登录态 JSON 含 `a2` / `tgt` 等敏感票据；`*.db` 已 `.gitignore`，勿外传截图/日志。
 
 ---
 

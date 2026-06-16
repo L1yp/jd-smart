@@ -336,6 +336,11 @@ def main():
                     insert_sign(d)
                 except Exception as e:
                     print("[db error]", e)
+                # wjlogin 登录态(WUserSigInfo)读写：高亮一行便于扫（整份 JSON 在 sign 表 input_txt）
+                k = d.get("kind") or ""
+                if k.startswith("WUserSig"):
+                    js = (d.get("input_txt") or "").replace("\n", " ")
+                    print(f'    [WJLOGIN] {k}  json[{len(js)}B]={js[:90]}..')
             elif kind == "error":
                 print("[script error]", payload.get("data"))
         elif message.get("type") == "log":
