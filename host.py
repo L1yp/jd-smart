@@ -110,6 +110,33 @@ CREATE TABLE IF NOT EXISTS cipher (
 CREATE INDEX IF NOT EXISTS idx_cipher_kind  ON cipher(kind);
 CREATE INDEX IF NOT EXISTS idx_cipher_plain ON cipher(plain_txt);
 CREATE INDEX IF NOT EXISTS idx_cipher_ct    ON cipher(cipher_txt);
+
+-- com.wangyin.platform.CryptoUtils 全方法普查（来自 frida_cryptoutils_capture.js）。
+-- sign 位置未钉死时，先看清这个「网银在线」底层加密类被谁/用什么入参调用/返回什么。
+-- 一行 = 一个「方法+参数预览+返回预览」唯一指纹(fp)；count = 去重累计调用次数。
+CREATE TABLE IF NOT EXISTS crypto_utils (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    captured_at TEXT,        -- 首次见到该指纹的时间
+    last_at     TEXT,        -- 最近一次
+    clazz       TEXT,
+    method      TEXT,        -- 方法名（混淆则为 a/b/c）
+    sig         TEXT,        -- 参数类型签名，如 (String,int)
+    is_native   INTEGER,     -- 1=native（实现在 .so，sign/加解密常落这）
+    args_txt    TEXT,        -- 入参可打印预览（多参用 | 分隔，已截断）
+    args_hex    TEXT,        -- 入参里 byte[] 的 hex（已截断）
+    ret_type    TEXT,        -- 返回类型
+    ret_txt     TEXT,        -- 返回值可打印预览
+    ret_hex     TEXT,        -- 返回 byte[] 的 hex（已截断）
+    ret_b64     TEXT,        -- 返回 byte[] 的 base64（sign 若是 b64 形态看这）
+    count       INTEGER,     -- 去重累计调用次数
+    fp          TEXT UNIQUE, -- 去重指纹（method+sig+args+ret 截断后 hash）
+    matched     INTEGER,     -- 命中 TARGETS
+    target      TEXT,
+    stack       TEXT         -- 仅命中 / FOCUS_METHODS 时有值
+);
+CREATE INDEX IF NOT EXISTS idx_cu_method ON crypto_utils(method);
+CREATE INDEX IF NOT EXISTS idx_cu_native ON crypto_utils(is_native);
+CREATE INDEX IF NOT EXISTS idx_cu_match  ON crypto_utils(matched);
 """
 
 
@@ -289,6 +316,32 @@ def main():
             )
             con.commit()
 
+    def insert_cryptoutils(d):
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with db_lock:
+            con.execute(
+                "INSERT INTO crypto_utils(captured_at,last_at,clazz,method,sig,is_native,"
+                "args_txt,args_hex,ret_type,ret_txt,ret_hex,ret_b64,count,fp,matched,target,stack) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(fp) DO UPDATE SET "
+                "count=count+excluded.count, last_at=excluded.last_at, "
+                "matched=MAX(matched,excluded.matched), "
+                "target=COALESCE(excluded.target,crypto_utils.target), "
+                "stack=COALESCE(excluded.stack,crypto_utils.stack)",
+                (
+                    now, now,
+                    d.get("clazz"), d.get("method"), d.get("sig"),
+                    1 if d.get("is_native") else 0,
+                    d.get("args_txt"), d.get("args_hex"),
+                    d.get("ret_type"), d.get("ret_txt"), d.get("ret_hex"), d.get("ret_b64"),
+                    int(d.get("count") or 1),
+                    d.get("fp"),
+                    1 if d.get("matched") else 0,
+                    d.get("target"), d.get("stack"),
+                ),
+            )
+            con.commit()
+
     def on_message(message, data):
         if message.get("type") == "send":
             payload = message.get("payload") or {}
@@ -356,6 +409,21 @@ def main():
                     inp = (d.get("input_txt") or "").replace("\n", " ")
                     extra = f' in={inp[:44]}' if inp else ""
                     print(f'    [{tag}] {k}{extra} -> {val[:80]}')
+            elif kind == "cu":
+                d = payload.get("data") or {}
+                try:
+                    insert_cryptoutils(d)
+                except Exception as e:
+                    print("[db error/cu]", e)
+                    return
+                m = d.get("method")
+                sig = d.get("sig") or ""
+                nat = " native" if d.get("is_native") else ""
+                a = (d.get("args_txt") or "").replace("\n", " ")[:50]
+                r = (d.get("ret_txt") or d.get("ret_b64") or d.get("ret_hex") or "")
+                r = ("" if r is None else r).replace("\n", " ")[:50]
+                flag = " [MATCH]" if d.get("matched") else ""
+                print(f'    [CU] {m}{sig}{nat} "{a}" -> {r}{flag}')
             elif kind == "error":
                 print("[script error]", payload.get("data"))
         elif message.get("type") == "log":
