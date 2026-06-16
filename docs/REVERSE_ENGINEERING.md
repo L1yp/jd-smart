@@ -434,6 +434,37 @@ Body（表单）: body=<URL编码的加密信封>
 > 注意：若彩虹 SDK 不走 okhttp3（自带 HttpURLConnection），`http` 表可能抓不到该请求；
 > 但 `sign`/`cipher` 两个 hook 仍能拿到签名原文与明文，请求外形对照 jadx 即可。
 
+### 8.5 实测：getHouses 的真正鉴权是 Cookie（JMA / 设备指纹）
+
+抓 getHouses 时发现：除了 §8.2 的 `sign`/`ep`，它**真正认的是两个 Cookie**（设备级稳定值，非每请求签名）：
+
+```
+whwswswws = <jmafinger UUID>                          # JMA 软设备 id，一次生成、持久化
+unionwsws = {"devicefinger":"eidA005...","jmafinger":"<同上 UUID>"}
+                        └ eid，来自 com.jd.sec.LogoManager.getLogo()
+```
+
+- `devicefinger` = **eid**，JD 硬件指纹。`getLogo()` 内部 `BiometricManager.getCacheTokenByBizId(bizId, a.c(), a.b())`
+  只是**读缓存**；真正生成在 `com.jd.sec` 的 **jdguard native**（`libjdguard.so` 一类）。
+- eid 结构：`eid` + 版本头 + **状态位 `[8:10]`** + 载荷。代码里 `"41".equals(substring(8,10))` 命中就**重生成**——
+  即 `41` = 残缺/降级态。所以抓的时候要抓一个**状态位 != 41 的“好 eid”**。
+- `jmafinger` / `whwswswws` = 同一个 **UUID**，一次生成后持久化（京东系多在 MMKV）。
+
+**战略：到此打住，别逆 native。** 这是 cookie 鉴权，eid/UUID 都是**设备级稳定值** ⇒ 正确打法是
+**抓一次、替换重放**，不是复现算法（jdguard native 白盒 + 反调试，投入产出比极低且无必要）。
+
+逆向入口 [`frida_jma_capture.js`](../frida_jma_capture.js)，只 hook **输出边界 + 拼装点**，落 `sign` 表（`kind=JMA.*`）：
+
+1. `com.jd.sec.LogoManager.getLogo()` → eid（顺带打印状态位，判是否 `41`）；
+2. `*BiometricManager.getCacheTokenByBizId(...)` → 确认“读缓存” + bizId 三参（类名自动发现）；
+3. `org.json.JSONObject.put("devicefinger"/"jmafinger")` → `unionwsws` 拼装点 + 栈；
+4. `okhttp3.Request$Builder.header("Cookie", …)` → cookie 落到请求那一刻 + 栈。
+
+- **cookie 其实已被抓到**：`http` 表的 `req_headers` 本就含 `Cookie`，直接 SQL 取即可重放；本脚本补的是
+  **生成 / 来源 / 刷新节奏**。
+- 找 UUID 存哪：把抓到的 UUID 填进 [`frida_trace_secret_src.js`](../frida_trace_secret_src.js) 的 `TARGETS` 跑一遍，
+  命中 MMKV/SP 的 `getString` 即存储点（见 §5.4）。
+
 ---
 
 ## 9. 安全与合规
@@ -453,6 +484,7 @@ Body（表单）: body=<URL编码的加密信封>
 | [`frida_okhttp_capture.js`](../frida_okhttp_capture.js) | 单独的 OkHttp 抓包 hook |
 | [`frida_sign_capture.js`](../frida_sign_capture.js) | 单独的 crypto 签名 hook（MessageDigest/Mac/Signature/Cipher/Base64） |
 | [`frida_color_capture.js`](../frida_color_capture.js) | **彩虹网关版**（api.m.jd.com）：okhttp 抓包 + SHA-256 sign + ep/body 加密信封追踪（落 `color`/`cipher` 表，见 §8） |
+| [`frida_jma_capture.js`](../frida_jma_capture.js) | **JMA/设备指纹 cookie 版**（getHouses 真正鉴权）：LogoManager.getLogo(eid) + BiometricManager 缓存 + unionwsws/Cookie 拼装（落 `sign` 表 `kind=JMA.*`，见 §8.5） |
 | [`frida_trace_secret_src.js`](../frida_trace_secret_src.js) | 反查已知值（device_md 等）出处：SharedPreferences / MMKV / JSONObject |
 | [`trace_d_init.js`](../trace_d_init.js) | 一次性调试：dump `OkHttpRequest(vc.d)` 构造参数 + 调用栈 |
 | [`host.py`](../host.py) | Frida 主机：加载 hook 脚本，把记录落 SQLite（`http` + `sign` 表；彩虹网关另落 `color` + `cipher` 表） |

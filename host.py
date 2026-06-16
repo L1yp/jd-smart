@@ -185,7 +185,7 @@ def main():
     ap.add_argument("-p", "--package", required=True,
                     help="App 包名，用 frida-ps -Uai 查（小京鱼大概类似 com.jd.smart）")
     ap.add_argument("-s", "--script", default="frida_capture.js",
-                    help="默认合并版（http+sign 双表）；彩虹网关 api.m.jd.com 用 frida_color_capture.js（多落 color+cipher 表）")
+                    help="默认合并版（http+sign 双表）；彩虹网关用 frida_color_capture.js；JMA/设备指纹 cookie 用 frida_jma_capture.js")
     ap.add_argument("-d", "--db", default="jd_smart_traffic.db")
     ap.add_argument("--spawn", action="store_true",
                     help="spawn 启动而非 attach，能抓到启动期的登录/换票请求")
@@ -349,6 +349,10 @@ def main():
                         extra = ""
                     txt = (d.get("input_txt") or "").replace("\n", " ")
                     print(f'    [WJLOGIN] {k}{extra}  data[{len(txt)}B]={txt[:70]}..')
+                elif k.startswith("JMA."):
+                    # JMA/设备指纹 cookie 鉴权：eid / cookie / unionwsws（值在 out_b64）
+                    val = (d.get("out_b64") or "").replace("\n", " ")
+                    print(f'    [JMA] {k}  {val[:110]}')
             elif kind == "error":
                 print("[script error]", payload.get("data"))
         elif message.get("type") == "log":

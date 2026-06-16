@@ -6,6 +6,9 @@
 # 本地真实凭据 —— 绝不提交（example 模板可提交）
 jd_smart_secrets.json
 
+# 调试用真实请求脚本（REST client / .http，常含 cookie/tgt/sign 等实时凭据）
+*.http
+
 # Python
 __pycache__/
 *.pyc
