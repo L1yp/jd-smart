@@ -448,7 +448,9 @@ unionwsws = {"devicefinger":"eidA005...","jmafinger":"<同上 UUID>"}
   只是**读缓存**；真正生成在 `com.jd.sec` 的 **jdguard native**（`libjdguard.so` 一类）。
 - eid 结构：`eid` + 版本头 + **状态位 `[8:10]`** + 载荷。代码里 `"41".equals(substring(8,10))` 命中就**重生成**——
   即 `41` = 残缺/降级态。所以抓的时候要抓一个**状态位 != 41 的“好 eid”**。
-- `jmafinger` / `whwswswws` = 同一个 **UUID**，一次生成后持久化（京东系多在 MMKV）。
+- `jmafinger` / `whwswswws` = 同一个 **UUID**：`getJMAFinger` 即读 SharedPreferences
+  **`jma_sp_file` / `jma_softfingerprint`**，首次 `UUID.randomUUID()` 生成后持久化、**之后不变**
+  ⇒ 抓一次即可重放（已确认源码，非 MMKV）。
 
 **eid = deviceFinger，绕不开**；但它是「生成一次 → 持久化 → 读取」模型（调用树见 §8.6），所以
 **逆向落点不是叶子的生成算法**，而是两条务实路线：① 找到 worker 读的 **token 持久化文件**直接拿；
