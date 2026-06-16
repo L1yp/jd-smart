@@ -11,7 +11,7 @@ getHouses = **彩虹网关（api.m.jd.com）+ Cookie 设备指纹 + 每请求签
 **replay 之所以失败，不是指纹变了，而是 query 的 `sign` 覆盖了 `t`（时间戳）= 防重放**（§8.7）：
 旧 `t` + 旧 `sign` 必被判 invalid sign。所以**唯一硬骨头是「用新 `t` 重算 `sign`」**——
 `ep`/`body` 的 `ciphertype:5` 已证实是**换表 base64**（[`color_codec.py`](../color_codec.py) 可离线 decode/encode），
-**不再是障碍**。**下一阶段：攻 `sign`。**
+**不再是障碍**。**本阶段：攻 `sign`——已下手 hook 头号嫌疑 `com.jingdong.sdk.jdupgrade.inner.utils.d.a(byte[],byte[])`（HmacSHA256），见 §7.1。**
 
 ## 2. 请求结构（详见 §8.1/§8.2）
 
@@ -66,7 +66,7 @@ Body(form): body=<加密信封JSON>{cipher:{body:<真实请求体密文>}}
 | 脚本 | 抓什么 | 落表 |
 |---|---|---|
 | [`frida_capture.js`](../frida_capture.js) | okhttp + 旧接口 sign + auth-tracer + secret-finder | `http` / `sign` |
-| [`frida_color_capture.js`](../frida_color_capture.js) | 彩虹网关 okhttp + SHA-256 sign + ep/body 加密信封 | `http`→`color` / `sign` / `cipher` |
+| [`frida_color_capture.js`](../frida_color_capture.js) | 彩虹网关 okhttp + SHA-256 sign + ep/body 加密信封 + **Part7: jdupgrade `d.a`(HmacSHA256)** | `http`→`color` / `sign`(含 `HMAC.*`) / `cipher` |
 | [`frida_jma_capture.js`](../frida_jma_capture.js) | LogoManager.getLogo + BiometricManager + unionwsws/Cookie | `sign`（`JMA.*`） |
 | [`frida_eid_capture.js`](../frida_eid_capture.js) | worker `e` 叶子 + getCacheTokenByBizId + 现造 | `sign`（`EID.*`） |
 | [`frida_loaddoor_capture.js`](../frida_loaddoor_capture.js) | **native** `LoadDoor` enc/dec/getToken/checkSum/getEid + SP 键 + rpc 现解 | `sign`（`LD.*`） |
@@ -93,6 +93,25 @@ runbook：
    两边一对就知道 **sign 在 Java 还是 native**，以及原文/密钥。
 3. 重点确认：**`ep` 是否进 sign 原文**（决定 ep 能否单独重放）。
 4. 离线复现：仿 [`verify_sign.py`](../verify_sign.py) 写 `verify_color_sign.py` 验证拼接公式。
+
+### 7.1 已加 hook：jdupgrade `d.a(byte[],byte[])`（HmacSHA256，sign 头号嫌疑）
+
+静态分析锁定 `com.jingdong.sdk.jdupgrade.inner.utils.d.a(byte[],byte[])` 内部走 **HmacSHA256**（输出 32B，与 wire `sign`=64hex 同型）。
+已并入 [`frida_color_capture.js`](../frida_color_capture.js) **Part 7**——和 okhttp 抓包**同一脚本/同一次运行**，这样「d.a 输出」与「同请求的 wire sign」都进同一个库，能直接对上（wire sign 每请求随 `t` 变，必须同跑才对得齐）。
+
+- 只挂 `a(byte[],byte[])` 这一重载，抓 **arg0 / arg1 / 输出 / 调用栈**，落 `sign` 表 `kind=HMAC.a`。
+- 跑法照旧：`python host.py -p <包名> -s frida_color_capture.js --spawn` → 触发一次 getHouses。
+- **判定它是不是 sign**（d.a 发包前算、okhttp 发包时记 wire sign，两者同库）：
+  ```sql
+  SELECT s.id, s.out_hex, c.sign, c.function_id, c.t
+    FROM sign s JOIN color c ON lower(s.out_hex)=lower(c.sign)
+   WHERE s.kind='HMAC.a' ORDER BY s.id DESC;
+  ```
+  命中 ⇒ d.a 即 sign 计算：其 **data 入参 = preimage**（反推 `functionId+body+t+…+secret` 拼接公式），另一入参 = **HMAC key**。
+- **哪个 arg 是 key**：d.a 内部 HmacSHA256 的 key 会被既有 `[Mac.init]`/`[SecretKeySpec]` 同时打出 → 与之相等的那个 arg 即 key，另一个就是 preimage。
+- **离线复现/验证**（用 App 自带实现，免重写算法）：`frida -U -n <包名> -l frida_color_capture.js` 后 REPL：
+  `rpc.exports.dahmac('hex:<keyhex>', '<新 t 的 preimage>')` —— 输出 == 新 `t` 的 wire sign 即拼接公式正确，replay 即通。
+- 若启动期 `d` 未加载（jdupgrade 懒初始化）：脚本自带 50×0.7s 重试；仍无则触发一次「检查更新」或改 attach 模式；换 App 版本类名变了，改顶部 `UPGRADE_HMAC_CLASS`。
 
 ## 8. 再之后：`ep` / `body` 的 `ciphertype:5`
 
