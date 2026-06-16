@@ -11,7 +11,7 @@ getHouses = **彩虹网关（api.m.jd.com）+ Cookie 设备指纹 + 每请求签
 **replay 之所以失败，不是指纹变了，而是 query 的 `sign` 覆盖了 `t`（时间戳）= 防重放**（§8.7）：
 旧 `t` + 旧 `sign` 必被判 invalid sign。所以**唯一硬骨头是「用新 `t` 重算 `sign`」**——
 `ep`/`body` 的 `ciphertype:5` 已证实是**换表 base64**（[`color_codec.py`](../color_codec.py) 可离线 decode/encode），
-**不再是障碍**。**本阶段：攻 `sign`。实测：`d.a`(HmacSHA256) 只在「检查更新」走、getHouses 不经它；getHouses 真签名器 = `SignRequestInterceptor.c` + native `NativeEncodeDataToServer(_gm)`（见 §7.2），hook 已就位。**
+**不再是障碍**。**本阶段：攻 `sign`。实测：`d.a`(HmacSHA256) 只在「检查更新」走、getHouses 不经它；getHouses 真签名器 = `SignRequestInterceptor.c` + native `NativeEncodeDataToServer(_gm)`（见 §7.2）。其下的 HMAC 原语已锁定 = `com.jd.smart.algorithm.NativeAlgorithmHelper`：算法 = **标准 HMAC-SHA256（key 当 32 字符 ASCII 文本，非 fromhex）**，**密钥固定**（内嵌 `libnativealgorithm.so`，经无参 `getSecretKey()` 取，由 1 参 `getHmacSha256Value(data)` 内部消费）。详见 §7.3。**
 
 ## 2. 请求结构（详见 §8.1/§8.2）
 
@@ -70,6 +70,7 @@ Body(form): body=<加密信封JSON>{cipher:{body:<真实请求体密文>}}
 | [`frida_jma_capture.js`](../frida_jma_capture.js) | LogoManager.getLogo + BiometricManager + unionwsws/Cookie | `sign`（`JMA.*`） |
 | [`frida_eid_capture.js`](../frida_eid_capture.js) | worker `e` 叶子 + getCacheTokenByBizId + 现造 | `sign`（`EID.*`） |
 | [`frida_loaddoor_capture.js`](../frida_loaddoor_capture.js) | **native** `LoadDoor` enc/dec/getToken/checkSum/getEid + SP 键 + rpc 现解 | `sign`（`LD.*`） |
+| [`frida_sign_pipeline_capture.js`](../frida_sign_pipeline_capture.js) | **签名流水线三层**：A `NativeAlgorithmHelper.getSecretKey()`/`getHmacSha256Value` 入出（真 HMAC 原语，§7.3）+ B `light_http` 贴 sign + C `manto` 下发；#N 串因果 | —（纯 console） |
 | 全部 `frida_*.js` | wjlogin 登录态读写/刷新/落盘 | `sign`（`WUserSig.*`/`WJ.*`） |
 | [`color_codec.py`](../color_codec.py) | `ciphertype:5` 离线 decode/encode（ep/body 自造） | —（纯算） |
 | [`verify_color_sign.py`](../verify_color_sign.py) | 离线复现 `HmacSHA256(preimage, secret)→64hex`（核对 wire sign / 换新 t 重算） | —（纯算，密钥读 `jd_smart_secrets.json`） |
@@ -162,6 +163,59 @@ SELECT s.kind, s.out_hex, c.sign, c.t
 - **对不上 `c.sign` 但对得上 `c.body_cipher`/`ep`** ⇒ `NativeEncodeDataToServer` 是「整体加密 data 到服务端」（含 sign 之外的料），
   把 join 右边换成 `c.body_cipher` 再看，sign 可能是其输出的一段或另由 `SIGNI.c` 产出。
 - native 多在首个请求随 `lib*.so` 初始化才加载；脚本对拦截器/native 各自重试（50×0.7s / 40×1s）。
+
+### 7.3 sign 原语锁定：`NativeAlgorithmHelper`（标准 HMAC-SHA256 + 固定内嵌 secret）
+
+§7.2 的真签名器（`SignRequestInterceptor.c` / native `NativeEncodeDataToServer`）底下的 **HMAC 原语**已定位到：
+
+```java
+public final class NativeAlgorithmHelper {            // System.loadLibrary("nativealgorithm")
+    public static final native String getHmacSha256Value(String data);          // 1 参：key 内部取自 getSecretKey()
+    public static final native String getHmacSha256Value(String key, String data); // 2 参：key 显式
+    public static final native String getSecretKey();                            // 返回固定密钥本体
+}
+```
+
+**① 算法 = 标准 HMAC-SHA256，key 当「32 字符 ASCII 文本」(32B)，非 `fromhex` 的 16B。**
+此结论从抓包库里一条**完整三元组**（id 373–375，`stats-api` 分析子系统的 Java `Mac` 路径，与本原语同款约定）离线证死：
+
+```python
+import hmac, hashlib
+data = 'stats-api&{"appKey":"8135aa32c53140dfb72110ded25d210e"}&381&1&1.17.0&HUAWEI&HWI-AL00&statsConfig&wifi&9&xjgw-android&1080*2160&2.1.9&1781573926594&ef42e0843b69284185f99fbebfe11b41'
+key  = 'f947bd5915ce47738050241663f595d0'                # 32 字符
+hmac.new(key.encode(),            data.encode(), hashlib.sha256).hexdigest()  # == 抓到的 out_hex 452cc519... ✓ 命中
+hmac.new(bytes.fromhex(key),      data.encode(), hashlib.sha256).hexdigest()  # 9c1f50...  ✗ 不命中
+```
+
+**② 密钥是固定的（内嵌 so，非每请求传入）。** 判据：App 实际只命中 **1 参** `getHmacSha256Value(String data)`——
+该重载**没有 key 形参**，key 只能来自 native 内部（`getSecretKey()` / 烤进 `libnativealgorithm.so`）；而 `getSecretKey()`
+是**无参 getter**，返回单一定值。故 secret **不是每请求输入，而是按 App 构建固定**（同 jdupgrade 那个 prod/test 内嵌 secret 的套路）。
+本次抓到的值 `6b086ed29b1a4483b4544143061b295d`（32 字符，与三套 Java HMAC 密钥 `121dce72…`/`f947bd59…`/`e45e21c9…` 都不同——
+那三套是 stats-api/mpaas2 等**别的**子系统；getAllDevices/getHouses 走 native 这一套，绕开 `javax.crypto.Mac`，所以不出现在 `sign` 表的 `SecretKeySpec/Mac.*` 行里）。
+> 待补：跨设备/重装后 `getSecretKey()` 是否仍 == `6b086ed2…`，需第二台机抓一次或反 `libnativealgorithm.so` 才能从「按构建固定」升级到「全局固定」。对**同机 replay** 已足够：secret 不变，每请求只 `t` 变 → 同 key 换新 `t` 重算 HMAC 即可。
+
+**③ preimage 形状（getAllDevices 实样，18 段、`&` 连接、首尾都是同一 `uuid`）：**
+
+```
+uuid & appid(jdsmart-android) & 20_1720_22909_60380(疑似 build 组合) & body({"houseId":"1388207"}) & 381 &
+client(android) & version(1.17.0) & brand(HUAWEI) & model(HWI-AL00) & eid & ext({"prstate":"0"}) &
+functionId(jdsmart.house.getAllDevices) & network(wifi) & sdkInt(28) & appname(xjgw-android) & screen(1080*2160) & t(ms) & uuid
+```
+
+与 §7.1 的 JD 套路一致：**TreeMap 各 value 按序 `&` 拼、只拼 value**。
+
+**④ Python 复现 / 核对**（用现成 [`verify_color_sign.py`](../verify_color_sign.py)，`--key` 直接给即 key-as-text）：
+
+```bash
+python verify_color_sign.py --preimage "<上面那串 data>" --key 6b086ed29b1a4483b4544143061b295d --expect <wire sign 或抓到的 sign>
+```
+
+本次该样本算得（**待与抓到的 `getHmacSha256Value` 返回值 / wire `sign` 比对收口**）：
+- key-as-text(32B)：`91f2368a8abbc3ff37b2ae7fe0b86358be71fe010b61588f733fcff0dd2a595a` ← **首选**（与 ① 证明的约定一致）
+- key-as-hex(16B) ：`247aadc258e5a348ad00d751f0794456a8dfc5fb8b62d0e2582fc09e7352705d`（旁证，native 若反常才用）
+
+抓 (data→sign) 对照用 [`frida_sign_pipeline_capture.js`](../frida_sign_pipeline_capture.js)（A 层 `getSecretKey()`/`getHmacSha256Value` 入出 + B 贴 sign + C 下发，纯 console、#N 串因果）。
+text 形命中 ⇒ 原语 + key 形态 + preimage 三者全收口，sign 即可离线现造。
 
 ## 8. 再之后：`ep` / `body` 的 `ciphertype:5`
 
