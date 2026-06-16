@@ -352,7 +352,7 @@ def main():
                 elif k.startswith(("JMA.", "EID.", "LD.", "HMAC.")):
                     # JMA cookie / eid 内部链路 / LoadDoor native / jdupgrade d.a HMAC（in=input_txt, out=out_b64）
                     tag = k.split(".")[0]
-                    val = (d.get("out_b64") or "").replace("\n", " ")
+                    val = (d.get("out_b64") or d.get("out_hex") or "").replace("\n", " ")
                     inp = (d.get("input_txt") or "").replace("\n", " ")
                     extra = f' in={inp[:44]}' if inp else ""
                     print(f'    [{tag}] {k}{extra} -> {val[:80]}')

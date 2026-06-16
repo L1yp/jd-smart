@@ -51,6 +51,7 @@ var TARGETS = [];             // 想高亮的 wire 值（如本次 sign / ep 某
 var HOOK_UPGRADE_HMAC = true;                                       // 抓 d.a 的【两入参 + 输出 + 栈】，落 sign 表 kind=HMAC.a
 var UPGRADE_HMAC_CLASS = 'com.jingdong.sdk.jdupgrade.inner.utils.d'; // 混淆类名，换 App 版本可能变；变了用栈/jadx 重认
 var UPGRADE_HMAC_METHOD = 'a';                                       // a(byte[],byte[]) -> HMAC；只挂 (byte[],byte[]) 这一重载
+var HMAC_DATA_ARG = 0, HMAC_KEY_ARG = 1;                            // 源码确认 d.a(data, key)：arg0=被签数据(preimage)、arg1=固定密钥(prod/test secret)
 
 var CONFIG = { chainClass: 'okhttp3.internal.http.RealInterceptorChain', requestClass: 'okhttp3.Request', bufferClass: 'okio.Buffer' };
 var MAX_BODY = 512 * 1024;
@@ -571,17 +572,20 @@ function installWjloginHook() {
 }
 
 /* =======================================================================
- *  Part 7 · jdupgrade HMAC 嫌疑：com.jingdong.sdk.jdupgrade.inner.utils.d.a(byte[],byte[])
- *  静态分析锁定其内部走 HmacSHA256 → 输出 32B，与 query 的 wire sign(64hex) 同型 ⇒ sign 头号候选。
- *  本 hook 只挂 a(byte[],byte[]) 这一重载，抓【arg0 / arg1 / 输出 / 调用栈】，落 sign 表(kind=HMAC.a)。
+ *  Part 7 · jdupgrade HMAC：com.jingdong.sdk.jdupgrade.inner.utils.d.a(byte[] data, byte[] key)
+ *  源码已确认（签名器 c.a(functionId, query, body)）：sign = HmacSHA256(data, key) 转十六进制(64hex)。
+ *    - arg0 = data = preimage：TreeMap(自定义比较器 b){functionId + query(map) + body} 的【各 value】
+ *             按 key 排序后用 '&' 拼接（只拼 value、不含 key、去尾随 &）；body = modBase64(gzip(bodyJson))。
+ *    - arg1 = key  = 固定 secret：c.W() 决定 prod/test 二选一，是 32 字符 hex 串的 UTF-8 字节(32B)，非解码后 16B。
+ *  本 hook 只挂 (byte[],byte[]) 重载，抓 data/key/sign/栈，落 sign 表(kind=HMAC.a；data→input_*、key→key_*)。
  *
- *  怎么判定它就是 sign（同一次 getHouses 内，d.a 在发包前算，okhttp 在发包时记 wire sign，两者都进库）：
+ *  ⚠ 此 c.a 属 jdupgrade（升级 SDK），签的是【升级请求】。getHouses(彩虹网关) 是否复用 d.a 要实测：
+ *    其 body 这里是 gzip+modBase64，而 getHouses 的 body 是 ciphertype:5 信封 —— 编码不同，
+ *    很可能是【并行的另一个签名器】（共用 d.a 这个 HMAC 原语，可能用不同 appSecret）。命中即复用：
  *    SELECT s.id, s.out_hex, c.sign, c.function_id, c.t
  *      FROM sign s JOIN color c ON lower(s.out_hex)=lower(c.sign)
  *     WHERE s.kind='HMAC.a' ORDER BY s.id DESC;
- *  命中 ⇒ d.a 即 sign 计算：其【data 入参】= preimage（反推 functionId+body+t+…+secret 的拼接公式），
- *        另一入参 = HMAC key（也会被既有 Mac.init/SecretKeySpec hook 抓到 key_txt，可交叉确认哪个 arg 是 key）。
- *  两入参谁是 key/谁是 data 未知，故两个都全量记录；确认后看 input_hex 的 arg0/arg1 即可。
+ *  命中 ⇒ 该次 d.a 的 input_txt 即 getHouses 的 preimage（直接读，免逆 比较器 b），key_txt = 其密钥。
  * ======================================================================= */
 var UPG_DONE = false;
 function installUpgradeHmacHook() {
@@ -591,32 +595,36 @@ function installUpgradeHmacHook() {
     function stk() { return safe(function () { return Log.getStackTraceString(Throwable.$new()); }, '(no stack)'); }
     function classNames(ov) { var ats = ov.argumentTypes || [], o = []; for (var i = 0; i < ats.length; i++) o.push(ats[i].className); return o; }
     function report(sig, args, ret) {
-        var a0 = args[0], a1 = args[1];
-        var a0h = hexN(a0), a1h = hexN(a1), a0t = txtN(a0), a1t = txtN(a1);
-        var outBytes = isBytes(ret);
-        var outHex = outBytes ? toHex(ret) : null, outB64 = outBytes ? toB64(ret) : null;
-        var outStr = (typeof ret === 'string') ? ret : (outBytes ? null : ('' + ret));
-        var cand = (outHex || (outStr ? ('' + outStr).toLowerCase() : '')) || '';
+        // 源码确认 d.a(data, key)：data=preimage、key=固定 secret。arg 顺序可经 HMAC_DATA_ARG/HMAC_KEY_ARG 调。
+        var data = args[HMAC_DATA_ARG], key = args[HMAC_KEY_ARG];
+        var dHex = hexN(data), dTxt = txtN(data), kHex = hexN(key), kTxt = txtN(key);
+        // 返回多为 64hex 字符串（HMAC 后转十六进制）；兜底 byte[]。统一把十六进制结果落 out_hex，便于 join color.sign。
+        var outHex = null, outB64 = null, outShow;
+        if (isBytes(ret)) { outHex = toHex(ret); outB64 = toB64(ret); outShow = 'hex=' + outHex + ' (' + ret.length + 'B)'; }
+        else if (typeof ret === 'string' && /^[0-9a-fA-F]+$/.test(ret) && ret.length % 2 === 0) { outHex = ret.toLowerCase(); outShow = 'hex=' + outHex + ' (' + (ret.length / 2) + 'B)'; }
+        else if (typeof ret === 'string') { outB64 = ret; outShow = 'str="' + ret + '"'; }
+        else { outShow = 'str="' + ret + '"'; }
         var hit = null;
-        for (var i = 0; i < TARGETS.length; i++) { if (cand && cand === ('' + TARGETS[i]).toLowerCase()) { hit = TARGETS[i]; break; } }
+        for (var i = 0; i < TARGETS.length; i++) {
+            var t = ('' + TARGETS[i]).toLowerCase();
+            if ((outHex && outHex === t) || (outB64 && ('' + outB64).toLowerCase() === t)) { hit = TARGETS[i]; break; }
+        }
         var s = stk();
-        console.log('\n[HMAC d.a(' + sig + ')]');
-        console.log('   arg0[' + (isBytes(a0) ? a0.length : '?') + 'B] hex=' + a0h);
-        console.log('        txt="' + a0t + '"');
-        console.log('   arg1[' + (isBytes(a1) ? a1.length : '?') + 'B] hex=' + a1h);
-        console.log('        txt="' + a1t + '"');
-        console.log('   out  ' + (outHex ? ('hex=' + outHex + '  (' + ret.length + 'B)') : ('str="' + outStr + '"')));
+        console.log('\n[HMAC d.a]  data[' + (isBytes(data) ? data.length : '?') + 'B]  key[' + (isBytes(key) ? key.length : '?') + 'B]');
+        console.log('   data.txt="' + dTxt + '"');
+        console.log('   key.txt ="' + kTxt + '"   (固定 secret，prod/test 二选一)');
+        console.log('   sign     ' + outShow);
         if (hit) {
             console.log('\n===================== MATCH: d.a 输出 == TARGETS(wire sign) =====================');
-            console.log(' ⇒ d.a 就是 sign。preimage = 上面的 data 入参；另一入参 = HMAC key。target=' + hit);
+            console.log(' ⇒ d.a 即此 sign。preimage = data.txt（上）；key = key.txt。target=' + hit);
             console.log(s);
             console.log('================================================================================\n');
         }
         emit({
-            kind: 'HMAC.a', algorithm: 'HmacSHA256?',
-            input_hex: 'arg0=' + a0h + ' | arg1=' + a1h,
-            input_txt: '[arg0] ' + a0t + '  ||  [arg1] ' + a1t,
-            out_hex: outHex, out_b64: (outB64 || outStr),
+            kind: 'HMAC.a', algorithm: 'HmacSHA256',
+            input_hex: dHex, input_txt: dTxt,
+            key_hex: kHex, key_txt: kTxt,
+            out_hex: outHex, out_b64: outB64,
             matched: hit ? 1 : 0, target: hit, stack: s
         });
     }
@@ -656,10 +664,10 @@ function installUpgradeHmacHook() {
     console.log('[hmac] jdupgrade HMAC hook 安装中（盯 ' + UPGRADE_HMAC_CLASS + '.a(byte[],byte[])，落 sign 表 kind=HMAC.a）');
 }
 
-/* rpc：用 App 自带的 d.a 现场算 HMAC —— 验证「换新 t 的新 preimage ⇒ 新 sign」（替代离线复现算法）。
- * 仅 frida CLI REPL 用：frida -U -n <包名> -l frida_color_capture.js，然后：
- *   rpc.exports.dahmac('hex:<keyhex>', '<preimage 文本>')   // 输出 == 新 t 的 wire sign 即拼接公式正确
- * 入参约定：以 'hex:' 开头按十六进制，否则按 UTF-8 文本。arg 顺序与 d.a 一致（key/data 谁先未知，按抓到的来）。 */
+/* rpc：用 App 自带的 d.a(data, key) 现场算 HMAC —— 验证「换新 t 的新 preimage ⇒ 新 sign」（免对齐 gzip 字节）。
+ * 仅 frida CLI REPL 用：frida -U -n <包名> -l frida_color_capture.js，然后（顺序 = d.a：先 data 后 key）：
+ *   rpc.exports.dahmac('<新 t 的 preimage 文本>', '<32 字符 secret 文本>')   // 输出 == 新 t 的 wire sign 即公式正确
+ * 入参约定：以 'hex:' 开头按十六进制，否则按 UTF-8 文本。 */
 function toJavaBytes(s) {
     s = '' + s;
     if (s.indexOf('hex:') === 0) {
