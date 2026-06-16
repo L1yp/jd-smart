@@ -349,11 +349,13 @@ def main():
                         extra = ""
                     txt = (d.get("input_txt") or "").replace("\n", " ")
                     print(f'    [WJLOGIN] {k}{extra}  data[{len(txt)}B]={txt[:70]}..')
-                elif k.startswith("JMA.") or k.startswith("EID."):
-                    # JMA cookie 鉴权 / eid 内部链路（值在 out_b64）
-                    tag = "JMA" if k.startswith("JMA.") else "EID"
+                elif k.startswith(("JMA.", "EID.", "LD.")):
+                    # JMA cookie / eid 内部链路 / LoadDoor native（in=input_txt, out=out_b64）
+                    tag = k.split(".")[0]
                     val = (d.get("out_b64") or "").replace("\n", " ")
-                    print(f'    [{tag}] {k}  {val[:110]}')
+                    inp = (d.get("input_txt") or "").replace("\n", " ")
+                    extra = f' in={inp[:44]}' if inp else ""
+                    print(f'    [{tag}] {k}{extra} -> {val[:80]}')
             elif kind == "error":
                 print("[script error]", payload.get("data"))
         elif message.get("type") == "log":

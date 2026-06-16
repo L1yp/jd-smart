@@ -499,6 +499,52 @@ DeviceFingerUtils.a(ctx)                        # 缓存 f39083b；空 或 statu
 > 实务建议：**「现造」是最划算的复现**——不重写 jdguard 算法，而是驱动 App 自带 SDK 产出 eid。
 > 配合捕获一个 `status != 41` 的好 eid，getHouses 的 `devicefinger` 就解决了。
 
+### 8.7 eid 的 native 出处（libbiometric / LoadDoor）+ 为何 replay 失败
+
+`getLocalEid` 把 eid 来源彻底锤死：
+
+```
+t(ctx): localEid = LoadDoor.getInstance().getLocalEid(ctx)   # native getEid，长度必须 == 148
+        eid片  = localEid.substring(0, 116)                  # 前 116 = cookie 里的 eid（长度对上）
+        tail片 = localEid.substring(116)                      # 后 32  = 另一段（校验/盐？）
+        SP.putString(c("lcJade"), eid片);  SP.putString(c("field"), tail片)   # 落 SP（键经 c() 混淆）
+```
+
+即 eid = **native `libbiometric.so` 生成 → 切 116+32 → 落 SharedPreferences → 之后读 SP**，所以稳定。
+
+`com.jdcn.risk.cpp.LoadDoor`（加载 `libbiometric.so`）的 native 面板 = 这套风控总开关：
+
+| native | 作用 | 价值 |
+|---|---|---|
+| `enc(String)` / `dec(String)` | 字符串加/解密 | **极可能就是 §8.3 的 `ciphertype:5`**；`dec` 可直接解 `ep`/`body` 密文 |
+| `getToken(Object)` / `checkSum(Object)` | token / 校验和 | **sign 候选料** |
+| `getEid(Object)` | 148 = 116(eid)+32(tail) | 设备指纹源头 |
+| `getFingerprint/getModel`、`checkFingers`、`getDecStr`、`checkAntiFile` | 指纹/机型/比对/反篡改 | 旁证 |
+
+**为何「eid 没变但 replay 报 invalid sign」**：query 的 `sign` 覆盖 `t`（时间戳）——这是**防重放**。
+旧 `t`+旧 `sign` 必被判 invalid；cookies（eid/UUID）稳定不是原因。要重放就得**用新 `t` 重算 `sign`**。
+你两个怀疑里，JMAFinger(UUID) 基本不变，真正每请求变的是 `t`/`ts` 及随之变的 `sign`。
+
+工具 [`frida_loaddoor_capture.js`](../frida_loaddoor_capture.js)（落 `sign` 表 `kind=LD.*`）：
+
+1. hook `LoadDoor` 全部 native，抓 **`enc`/`dec` 明文↔密文**、`getToken`/`checkSum` 输入输出
+   （这 4 个带调用栈，看谁在用 → 关联 `sign`/`ep` 拼装）；
+2. hook SharedPreferences，**揪出 `c("lcJade")`/`c("field")` 真实键名**（值是 116/32 片）；
+3. **rpc**：`rpc.exports.dec("<密文>")` 用 App 自己的 native 现场解密任意串、`enc("android")` 验证
+   `ciphertype:5` 是不是 `enc`、`geteid()`/`gettoken()` 现取。
+
+**下一步定位 sign（建议顺序）**：
+
+1. **先确认变量**：连发两次 getHouses，diff 每个字段（彩虹库）：
+   ```sql
+   SELECT id, t, sign, body_ts, ep_ts, body_cipher FROM color
+   WHERE function_id='jdsmart.house.getHouses' ORDER BY id DESC LIMIT 2;
+   ```
+   cookies 在 `http.req_headers`。预期：变的是 `t`/`ts`/`sign`（+ 若 ep/body 含 ts 则其密文也变）。
+2. **再抓 sign 原文**：把 wire 的 `sign` 填进 `frida_color_capture.js` 的 `TARGETS`，命中的
+   `MD.digest(SHA-256)` 的 `input_txt` = sign preimage（§8.4）；若 sign 不走 Java MessageDigest 而走
+   `LoadDoor.getToken/checkSum`，本脚本 `LD.*` 会同时命中——两边一对就知道 sign 在 Java 还是 native。
+
 ---
 
 ## 9. 安全与合规
@@ -520,6 +566,7 @@ DeviceFingerUtils.a(ctx)                        # 缓存 f39083b；空 或 statu
 | [`frida_color_capture.js`](../frida_color_capture.js) | **彩虹网关版**（api.m.jd.com）：okhttp 抓包 + SHA-256 sign + ep/body 加密信封追踪（落 `color`/`cipher` 表，见 §8） |
 | [`frida_jma_capture.js`](../frida_jma_capture.js) | **JMA/设备指纹 cookie 版**（getHouses 真正鉴权）：LogoManager.getLogo(eid) + BiometricManager 缓存 + unionwsws/Cookie 拼装（落 `sign` 表 `kind=JMA.*`，见 §8.5） |
 | [`frida_eid_capture.js`](../frida_eid_capture.js) | **eid 内部链路版**：hook worker `e` 叶子 r/s/p/q/b + getCacheTokenByBizId(scope/pin) + 可选文件 I/O + 主动现造(AUTO_MINT/rpc)（落 `sign` 表 `kind=EID.*`，见 §8.6） |
+| [`frida_loaddoor_capture.js`](../frida_loaddoor_capture.js) | **libbiometric native 版**：hook `LoadDoor` 的 enc/dec/getToken/checkSum/getEid 等 native I/O + 揪 SP 键名 + rpc 现场加解密（落 `sign` 表 `kind=LD.*`，见 §8.7） |
 | [`frida_trace_secret_src.js`](../frida_trace_secret_src.js) | 反查已知值（device_md 等）出处：SharedPreferences / MMKV / JSONObject |
 | [`trace_d_init.js`](../trace_d_init.js) | 一次性调试：dump `OkHttpRequest(vc.d)` 构造参数 + 调用栈 |
 | [`host.py`](../host.py) | Frida 主机：加载 hook 脚本，把记录落 SQLite（`http` + `sign` 表；彩虹网关另落 `color` + `cipher` 表） |
