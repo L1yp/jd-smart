@@ -302,7 +302,107 @@ python query_device.py --device-id <32hex> --feed-id <feed_id>
 
 ---
 
-## 8. 安全与合规
+## 8. 彩虹/色彩网关接口（api.m.jd.com）—— `jdsmart.house.getHouses` 获取家庭列表
+
+> 与 §1–§7 的 `getDeviceSnapshot_v1`（`api.smart.jd.com`，HmacSHA1、20 字节）**是两套体系**。
+> 这是京东 App 通用的「彩虹/色彩」统一网关：所有业务走同一个 `POST /api`，靠 query 的
+> `functionId` 路由；请求被**客户端加密 + SHA-256 签名**。本节是该接口的拆解与逆向入口。
+
+### 8.1 速查（TL;DR）
+
+```
+POST https://api.m.jd.com/api
+  ?functionId=jdsmart.house.getHouses    # 业务方法名（网关路由键）
+  &appid=jdsmart-android                 # 网关应用 id（决定 appSecret）
+  &t=1781528966944                       # 请求时间戳 ms（参与 sign）
+  &uuid=ef42e0843b69284185f99fbebfe11b41 # 设备 uuid（32hex=16B）
+  &sign=52e5...4388                      # 64hex = 32B = SHA-256 家族（不是旧接口的 SHA-1！）
+  &ep=<URL编码的加密信封>                 # 设备指纹（加密），见 §8.3
+  &ef=1&bef=1                            # ep / body 是否加密的标志（1=已加密）
+
+Headers: Authorization / tgt（同旧接口，登录票据）
+
+Body（表单）: body=<URL编码的加密信封>
+  解码后: {"hdid":"...","ts":...,"ridx":1,
+          "cipher":{"body":"<真实请求体密文>"},
+          "ciphertype":5,"version":"1.2.0","appname":"com.jd.iots"}
+```
+
+### 8.2 Query 参数逐个拆解
+
+| 参数 | 示例 | 含义 / 来源 | 与 sign |
+|---|---|---|---|
+| `functionId` | `jdsmart.house.getHouses` | 业务方法名，网关据此路由 | 进原文 |
+| `appid` | `jdsmart-android` | 网关应用标识，**决定服务端用哪个 appSecret 验签** | 间接（定 key） |
+| `t` | `1781528966944` | 请求时刻 ms | 进原文 |
+| `uuid` | `ef42…11b41` | 设备 uuid，32hex=16B（疑似 md5(androidId/安装 id)，装机后恒定） | 多半进 |
+| `sign` | `52e5…4388`（64hex） | **请求签名**；32B ⇒ SHA-256 系（MD5 仅 16B，排除） | 它本身 |
+| `ep` | 加密信封 | encrypt params：设备指纹（eid/brand/model/screen/area…），**每字段单独加密** | 可能 |
+| `ef` | `1` | ep 加密标志（encrypt flag）。=0 则 ep 为明文 | 否 |
+| `bef` | `1` | body 加密标志（body encrypt flag）。=0 则 body 为明文 | 否 |
+
+要点：
+
+- `sign` 是 **32 字节**（64 hex），直接排除 MD5（16B），锁定 **SHA-256 / HmacSHA256**——与旧接口
+  的 20 字节 SHA-1 不是一回事，crypto hook 的 `SIGN_ALGS` 必须放宽到 `sha-256`。
+- `t`（query）≠ 信封里的 `ts`：`t` 是请求时刻、进签名；`ts` 是加密信封生成时刻。实测
+  `ep.ts`(…3056) 比 `body.ts`(…6987) 早 ~4 秒 ⇒ **ep 在会话里被缓存复用，body 每次新生成**。
+- `ef`/`bef` 是给网关的「这俩字段已加密」开关；想拿明文请求**不是**把它改成 0（服务端未必认），
+  而是去抓**加密前的明文**（§8.4）。
+
+### 8.3 加密信封与 `ciphertype:5`（核心难点）
+
+`ep`（query）和 `body`（表单）**共用同一个加密信封**，出自同一个 JD 客户端加密 SDK：
+
+```json
+{"hdid":"<设备硬件id,base64=32B>","ts":<ms>,"ridx":<会话内自增>,
+ "cipher":{ ...被加密的字段... },
+ "ciphertype":5,"version":"1.2.0","appname":"com.jd.iots"}
+```
+
+两个 scope 的差别只在 `cipher` 里装什么：
+
+- **ep.cipher**：设备指纹，**逐字段加密**——`eid`（JD 设备指纹/LogoManager 下发）、`d_brand`、
+  `d_model`、`screen`、`area`、`osVersion`、`networkType`、`client`、`partner`、`build`、
+  `clientVersion`、`aid`、`ext`。
+- **body.cipher**：只有一个 `body` 键 = **真实 getHouses 请求体整体加密**后的密文。
+
+**`ciphertype:5` 实测结论**：**不是标准 base64，也不是 AES**。
+
+- 拿语义已知字段反推：`client`（应=`android`/7B）、`networkType`（应=`wifi`/4B）按标准 base64
+  解出来是 `61 6e 6e 73 0f 5f 64`、`77 6b f0 68`——长度对得上但内容是乱的；
+- 各字段密文长度 2/3/6/7 字节都有，**没有 16 字节块填充** ⇒ 排除 AES（ECB/CBC 都要 16B 对齐）；
+- ⇒ 是 JD 自有的「**逐字节变换 +（很可能自定义字母表的）base64**」。**离线无法解**，
+  必须 live 抓加密函数的明文↔密文。
+
+### 8.4 逆向入口：`frida_color_capture.js` + 两张新表
+
+脚本 [`frida_color_capture.js`](../frida_color_capture.js)，配 `host.py` 落到**两张新表**（结构和旧接口
+差太多，单独建，见 §5.5 旁注）：
+
+- `color` 表：彩虹请求结构化（functionId/appid/t/uuid/sign/ef/bef/ep/各信封字段/body_cipher…），
+  由 `http` 表中 `host=api.m.jd.com` 的行**自动解析回填**（`host.py: parse_color`）。
+- `cipher` 表：信封拼装点调用栈（`kind=envelope`）+ 加密函数明文↔密文（`kind=encrypt`）。
+
+两遍打法（沿用 §5「发现→钉死」）：
+
+1. **第一遍（发现）**：`DISCOVER_ENC` 枚举 `com.jd*/com.jingdong*` 下名字含
+   encrypt/cipher/sign/security/guard/Logo 的候选类；同时 envelope tracer hook
+   `JSONObject.put("ciphertype", …)`，把**信封拼装那一帧的调用栈**打出来——紧贴 `org.json`
+   之前的 App 帧就是加密模块。
+2. **第二遍（钉死）**：把定位到的类全名填进脚本顶部 `ENCRYPT_CLASSES`，脚本自动 hook 其所有
+   `String->String` 方法，抓**明文↔密文**（如 `enc("android") -> "YW5ucw9fZK=="`、
+   `enc(真实 body JSON) -> body 密文`）。
+3. **求 sign**：把本次 wire 的 `sign` 填进 `TARGETS`，跑起来，命中的那条
+   `MD.digest(SHA-256)`/`Mac.doFinal(HmacSHA256)` 的 `input_txt` 就是 **sign 原文**（preimage）→
+   反推 `functionId + body + t + … + appSecret` 的拼接公式。
+
+> 注意：若彩虹 SDK 不走 okhttp3（自带 HttpURLConnection），`http` 表可能抓不到该请求；
+> 但 `sign`/`cipher` 两个 hook 仍能拿到签名原文与明文，请求外形对照 jadx 即可。
+
+---
+
+## 9. 安全与合规
 
 - 仅限**个人研究 / 自用自己账号的设备**。不内置、不提交任何密钥。
 - `jd_smart_secrets.json`、`*.db`（抓包库，含 token）已 `.gitignore`。
@@ -318,9 +418,10 @@ python query_device.py --device-id <32hex> --feed-id <feed_id>
 | [`frida_capture.js`](../frida_capture.js) | **合并版** hook：okhttp 抓包 + crypto 签名 + auth-tracer + secret-finder（落 `http`/`sign` 表） |
 | [`frida_okhttp_capture.js`](../frida_okhttp_capture.js) | 单独的 OkHttp 抓包 hook |
 | [`frida_sign_capture.js`](../frida_sign_capture.js) | 单独的 crypto 签名 hook（MessageDigest/Mac/Signature/Cipher/Base64） |
+| [`frida_color_capture.js`](../frida_color_capture.js) | **彩虹网关版**（api.m.jd.com）：okhttp 抓包 + SHA-256 sign + ep/body 加密信封追踪（落 `color`/`cipher` 表，见 §8） |
 | [`frida_trace_secret_src.js`](../frida_trace_secret_src.js) | 反查已知值（device_md 等）出处：SharedPreferences / MMKV / JSONObject |
 | [`trace_d_init.js`](../trace_d_init.js) | 一次性调试：dump `OkHttpRequest(vc.d)` 构造参数 + 调用栈 |
-| [`host.py`](../host.py) | Frida 主机：加载 hook 脚本，把记录落 SQLite（`http` + `sign` 表） |
+| [`host.py`](../host.py) | Frida 主机：加载 hook 脚本，把记录落 SQLite（`http` + `sign` 表；彩虹网关另落 `color` + `cipher` 表） |
 | [`verify_sign.py`](../verify_sign.py) | 离线一比一复现/校验签名 |
 | [`query_device.py`](../query_device.py) | 仅标准库的独立联网查询器（`--selftest` / `--device-id`+`--feed-id`） |
 | [`jd_smart_secrets.example.json`](../jd_smart_secrets.example.json) | 凭据模板（真实值放 `jd_smart_secrets.json`，已忽略） |
