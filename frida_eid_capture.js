@@ -299,10 +299,12 @@ Java.perform(function () {
                 ov.implementation = function () {
                     var ret = ov.apply(this, arguments);
                     try {
-                        var a = []; for (var i = 0; i < arguments.length; i++) a.push(clip('' + arguments[i], 120));
+                        var a = []; for (var i = 0; i < arguments.length; i++) a.push('' + arguments[i]);  // 全量不截断：要拿去离线复算/测算法
                         var rs = (ret == null) ? null : ('' + ret);
                         var st = once('ofg:' + name) ? stk() : null;
-                        console.log('\n[ofg] ' + OFG_CLASS + '.' + name + '(' + a.join(', ') + ')  ->  ' + clip(rs == null ? 'null' : rs, 120));
+                        console.log('\n[ofg] ' + OFG_CLASS + '.' + name + '()  (参数/返回全量未截断)');
+                        for (var j = 0; j < a.length; j++) console.log('  arg' + j + ' = ' + a[j]);
+                        console.log('  ret  = ' + (rs == null ? 'null' : rs));
                         if (st) console.log(st);
                         emit({ kind: 'EID.ofg.' + name, input_txt: a.join(' | '), out_b64: rs, stack: st, matched: 1 });
                     } catch (e) {}
