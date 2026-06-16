@@ -74,6 +74,7 @@ Body(form): body=<加密信封JSON>{cipher:{body:<真实请求体密文>}}
 | 全部 `frida_*.js` | wjlogin 登录态读写/刷新/落盘 | `sign`（`WUserSig.*`/`WJ.*`） |
 | [`color_codec.py`](../color_codec.py) | `ciphertype:5` 离线 decode/encode（ep/body 自造） | —（纯算） |
 | [`verify_color_sign.py`](../verify_color_sign.py) | 离线复现 `HmacSHA256(preimage, secret)→64hex`（核对 wire sign / 换新 t 重算） | —（纯算，密钥读 `jd_smart_secrets.json`） |
+| [`color_sign.py`](../color_sign.py) | **彩虹 sign 生成器**：18 键字母序拼 preimage + HMAC-SHA256（§7.3）；`--from-db` 自动解设备档，只换 functionId/body/t | —（纯算，secret/设备档读 `jd_smart_secrets.json`） |
 
 ## 7. 下一阶段：分析 query `sign`（可能 HmacSHA256，**也可能 native**）
 
@@ -194,28 +195,48 @@ hmac.new(bytes.fromhex(key),      data.encode(), hashlib.sha256).hexdigest()  # 
 那三套是 stats-api/mpaas2 等**别的**子系统；getAllDevices/getHouses 走 native 这一套，绕开 `javax.crypto.Mac`，所以不出现在 `sign` 表的 `SecretKeySpec/Mac.*` 行里）。
 > 待补：跨设备/重装后 `getSecretKey()` 是否仍 == `6b086ed2…`，需第二台机抓一次或反 `libnativealgorithm.so` 才能从「按构建固定」升级到「全局固定」。对**同机 replay** 已足够：secret 不变，每请求只 `t` 变 → 同 key 换新 `t` 重算 HMAC 即可。
 
-**③ preimage 形状（getAllDevices 实样，18 段、`&` 连接、首尾都是同一 `uuid`）：**
+**③ preimage 拼接规则（已收口，两条样本 byte-for-byte 复现）：18 个 key 按【字母序】排序、只拼 value、用 `&` 连接。**
+（= App 里的 TreeMap；`aid` 与 `uuid` **同值**=设备 uuid，分别排在头、尾，所以首尾各出现一次。）
 
-```
-uuid & appid(jdsmart-android) & 20_1720_22909_60380(疑似 build 组合) & body({"houseId":"1388207"}) & 381 &
-client(android) & version(1.17.0) & brand(HUAWEI) & model(HWI-AL00) & eid & ext({"prstate":"0"}) &
-functionId(jdsmart.house.getAllDevices) & network(wifi) & sdkInt(28) & appname(xjgw-android) & screen(1080*2160) & t(ms) & uuid
-```
+| # | key（字母序） | value 实样 | 来源 / 性质 |
+|---|---|---|---|
+| 1 | `aid` | `ef42…b41` | 设备 uuid（= `ep.cipher.aid`），固定 |
+| 2 | `appid` | `jdsmart-android` | 固定 |
+| 3 | `area` | `20_1720_22909_60380` | **LBS 区域码**（= `ep.cipher.area`），固定/随定位变 |
+| 4 | `body` | `{}` / `{"houseId":"1388207"}` | **每请求**：真实请求体 JSON（须与下发一致，无空格） |
+| 5 | `build` | `381` | 构建号（= `ep.cipher.build`），固定 |
+| 6 | `client` | `android` | 固定 |
+| 7 | `clientVersion` | `1.17.0` | 固定 |
+| 8 | `d_brand` | `HUAWEI` | 固定 |
+| 9 | `d_model` | `HWI-AL00` | 固定 |
+| 10 | `eid` | `eidA005…` | **设备指纹**（= `ep.cipher.eid`），固定（好 eid 抓一次） |
+| 11 | `ext` | `{"prstate":"0"}` | 固定 |
+| 12 | `functionId` | `jdsmart.init.commonConfigs` | **每请求** |
+| 13 | `networkType` | `wifi` | 固定 |
+| 14 | `osVersion` | `28`（= SDK_INT） | 固定 |
+| 15 | `partner` | `xjgw-android` | 固定 |
+| 16 | `screen` | `1080*2160` | 固定 |
+| 17 | `t` | `1781595251294` | **每请求**：毫秒时间戳（防重放） |
+| 18 | `uuid` | `ef42…b41`（= `aid`） | 设备 uuid，固定 |
 
-与 §7.1 的 JD 套路一致：**TreeMap 各 value 按序 `&` 拼、只拼 value**。
+> **关键洞察**：14 项设备字段 = 抓包 `ep`（ciphertype:5 信封）`cipher` 子字段**逐一对得上**（[`color_codec.py`](../color_codec.py) 解出），
+> 所以固定设备档**不必逆**、直接从 `ep` 解。三个"未知"已坐实：`20_1720_22909_60380`=`area`、`381`=`build`、`eidA005…`=`eid`。
+> 测接口时只换 `functionId`/`body`/`t` 即可；**device finger / JMA finger 是 Cookie 鉴权层，与本 sign 正交**，固定设备项就能先打通 sign。
 
-**④ Python 复现 / 核对**（用现成 [`verify_color_sign.py`](../verify_color_sign.py)，`--key` 直接给即 key-as-text）：
+**④ 离线生成器 [`color_sign.py`](../color_sign.py)**（已就此收口；实测 key-as-text，secret 直接算即可）。
+设备 14 项可 `--from-db` 从最新 `ep` 自动解出，每次只换 `functionId`/`body`/`t`：
 
 ```bash
-python verify_color_sign.py --preimage "<上面那串 data>" --key 6b086ed29b1a4483b4544143061b295d --expect <wire sign 或抓到的 sign>
+python color_sign.py --selftest                       # 验证排序+HMAC（合成值）
+python color_sign.py --from-db jd_smart_traffic.db --dump-profile     # 看解出的设备档
+python color_sign.py --from-db jd_smart_traffic.db --secret <32char> \
+       --function-id jdsmart.init.commonConfigs --body "{}"           # 现算（t 默认取当前）
 ```
 
-本次该样本算得（**待与抓到的 `getHmacSha256Value` 返回值 / wire `sign` 比对收口**）：
-- key-as-text(32B)：`91f2368a8abbc3ff37b2ae7fe0b86358be71fe010b61588f733fcff0dd2a595a` ← **首选**（与 ① 证明的约定一致）
-- key-as-hex(16B) ：`247aadc258e5a348ad00d751f0794456a8dfc5fb8b62d0e2582fc09e7352705d`（旁证，native 若反常才用）
-
-抓 (data→sign) 对照用 [`frida_sign_pipeline_capture.js`](../frida_sign_pipeline_capture.js)（A 层 `getSecretKey()`/`getHmacSha256Value` 入出 + B 贴 sign + C 下发，纯 console、#N 串因果）。
-text 形命中 ⇒ 原语 + key 形态 + preimage 三者全收口，sign 即可离线现造。
+> 实测复现（两条样本 `match=True`）：getAllDevices `{"houseId":"1388207"}`@t=1781595295703 →
+> `91f2368a…dd2a595a`；commonConfigs `{}`@t=1781595251294 → `c6ad09c3…74cc1e5b`。
+> secret/设备档放 gitignored `jd_smart_secrets.json`（`color_sign_secret` + `color_profile`，见 `*.example.json`），不硬编码、不提交。
+> 抓新 (data→sign) 对照仍可用 [`frida_sign_pipeline_capture.js`](../frida_sign_pipeline_capture.js)（A `getSecretKey`/`getHmacSha256Value` 入出 + B 贴 sign + C 下发）。
 
 ## 8. 再之后：`ep` / `body` 的 `ciphertype:5`
 
