@@ -32,6 +32,8 @@
  *      DUMP_BIO 定时自动读；也可 rpc 手动 dumpbio()。
  *      另 hook of.g.a/.b(String,String,String)（jade 密文编解码壳）——运行时直接抓 g.a 的入参(jade/whisper)
  *      与返回(明文 token)，与上面的持久化值相互印证（落 sign 表 kind=EID.ofg.a/.b）。
+ *      另 hook ff.e.h(Context,String,long,long,String,String)：打印 6 个参数 + 调用栈，倒数第二个 String
+ *      参数 = eid 来源，借调用栈回溯上级调用（谁把 eid 传进来的）（落 sign 表 kind=EID.ffe.h）。
  *
  * 用法:
  *   python host.py -p <包名> -s frida_eid_capture.js --spawn        # 落库 + AUTO_MINT
@@ -43,6 +45,7 @@ var BIOMETRIC_CANDIDATES = ['com.jd.sec.BiometricManager', 'com.jingdong.jdsdk.u
 var SEC_A_CLASS = 'com.jd.sec.a';   // scope=a.c(), pin=a.b()（混淆名，换版本可能变）
 var LOGO_CLASS = 'com.jd.sec.LogoManager';
 var OFG_CLASS = 'of.g';             // jade 密文编解码壳：静态 a/b(String,String,String)；p(ctx) 里 g.a(jade,whisper,"UTF-8") 解出真 token
+var FFE_CLASS = 'ff.e';             // ff.e.h(Context,String,long,long,String,String) 倒数第二参=eid 来源（hook 抓参数+栈回溯上级调用）
 var HOOK_FILE_IO = false;           // 开后在 com.jd.sec 栈下打印文件读写路径（找 token 持久化文件）
 var AUTO_MINT = true;               // 启动后定时主动调 getLogo 现造 eid
 var AUTO_MINT_AT_MS = [4000, 9000, 16000, 30000];
@@ -186,6 +189,7 @@ Java.perform(function () {
         for (var i = 0; i < methods.length; i++) {
             var mn = '' + methods[i].getName();
             if (done[mn]) continue; done[mn] = 1;
+            if (cn === FFE_CLASS && mn === 'h') continue;   // ff.e.h 交给 hookFfeH（带参数+栈），避免被此处泛 hook 覆盖
             var fn = W[mn]; if (!fn || !fn.overloads) continue;
             (function (name) {
                 fn.overloads.forEach(function (ov) {
@@ -317,9 +321,40 @@ Java.perform(function () {
         return hooked > 0;
     }
 
+    /* ff.e.h(Context, String, long, long, String, String)：倒数第二个 String 参数 = eid 来源
+     *   打印全部参数 + 调用栈（每次都打），借栈回溯是谁把 eid 传进来的（找上级调用）
+     *   优先精确命中该 6 参重载；缺则兜底 hook h 的全部重载 */
+    function hookFfeH() {
+        var E = safe(function () { return Java.use(FFE_CLASS); }, null);
+        if (!E || !E.h) return false;
+        var exact = safe(function () {
+            return E.h.overload('android.content.Context', 'java.lang.String', 'long', 'long', 'java.lang.String', 'java.lang.String');
+        }, null);
+        var targets = exact ? [exact] : (E.h.overloads || []);
+        if (!targets.length) return false;
+        targets.forEach(function (ov) {
+            ov.implementation = function () {
+                var ret = ov.apply(this, arguments);
+                try {
+                    var a = []; for (var i = 0; i < arguments.length; i++) a.push('' + arguments[i]);  // 全量不截断
+                    var st = stk();
+                    var eidSrc = (a.length >= 2) ? a[a.length - 2] : '?';   // 倒数第二个参数 = eid 来源
+                    console.log('\n[ffe.h] ' + FFE_CLASS + '.h()  参数全量 + 调用栈（倒数第二参 = eid 来源）');
+                    for (var j = 0; j < a.length; j++) console.log('  arg' + j + ' = ' + a[j] + (j === a.length - 2 ? '   <== eid 来源' : ''));
+                    console.log('  ret  = ' + (ret == null ? 'null/void' : ('' + ret)));
+                    console.log('  --- 调用栈（找上级调用）---\n' + st);
+                    emit({ kind: 'EID.ffe.h', input_txt: a.join(' | '), out_b64: eidSrc, stack: st, matched: 1 });
+                } catch (e) {}
+                return ret;
+            };
+        });
+        console.log('[ffe] hooked ' + FFE_CLASS + '.h(Context,String,long,long,String,String) x' + targets.length + '（参数+栈，倒数第二参=eid 来源）');
+        return true;
+    }
+
     /* ---- 安装：晚加载自动重试 ---- */
     try { hookFileIO(); } catch (e) { console.log('[eid] fileIO 安装失败: ' + e); }
-    var bioDone = false, ofgDone = false, tries = 0;
+    var bioDone = false, ofgDone = false, ffeDone = false, tries = 0;
     (function attempt() {
         if (!bioDone) {
             for (var i = 0; i < BIOMETRIC_CANDIDATES.length && !bioDone; i++) {
@@ -329,7 +364,8 @@ Java.perform(function () {
             }
         }
         if (!ofgDone) ofgDone = safe(function () { return hookOfG(); }, false);
-        if ((!bioDone || !ofgDone) && ++tries <= RETRY_MAX) { setTimeout(function () { Java.perform(attempt); }, RETRY_MS); return; }
+        if (!ffeDone) ffeDone = safe(function () { return hookFfeH(); }, false);
+        if ((!bioDone || !ofgDone || !ffeDone) && ++tries <= RETRY_MAX) { setTimeout(function () { Java.perform(attempt); }, RETRY_MS); return; }
         if (!bioDone) {
             console.log('[eid] 未命中 BiometricManager 候选，枚举 *BiometricManager* 供你填 BIOMETRIC_CANDIDATES：');
             Java.enumerateLoadedClasses({
@@ -338,6 +374,7 @@ Java.perform(function () {
             });
         }
         if (!ofgDone) console.log('[ofg] 未解析 ' + OFG_CLASS + '（换版本可能改名；可 frida 里枚举 of.* 候选后改 OFG_CLASS）');
+        if (!ffeDone) console.log('[ffe] 未解析 ' + FFE_CLASS + '.h（换版本可能改名/重载不符；可枚举 ff.* 候选后改 FFE_CLASS）');
     })();
 
     if (AUTO_MINT) {
