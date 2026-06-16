@@ -9,8 +9,9 @@ getHouses = **彩虹网关（api.m.jd.com）+ Cookie 设备指纹 + 每请求签
 
 设备指纹（cookie 的 `jmafinger` UUID、`eid`）与 `tgt` 都能**抓一次重放**（`tgt` 会过期需刷新）。
 **replay 之所以失败，不是指纹变了，而是 query 的 `sign` 覆盖了 `t`（时间戳）= 防重放**（§8.7）：
-旧 `t` + 旧 `sign` 必被判 invalid sign。所以唯一硬骨头是 **「用新 `t` 重算 `sign`」**
-（以及若服务端校验新鲜度，则连带 `ep`/`body` 的 `ciphertype:5` 加密）。**下一阶段：攻 `sign`。**
+旧 `t` + 旧 `sign` 必被判 invalid sign。所以**唯一硬骨头是「用新 `t` 重算 `sign`」**——
+`ep`/`body` 的 `ciphertype:5` 已证实是**换表 base64**（[`color_codec.py`](../color_codec.py) 可离线 decode/encode），
+**不再是障碍**。**下一阶段：攻 `sign`。**
 
 ## 2. 请求结构（详见 §8.1/§8.2）
 
@@ -33,8 +34,8 @@ Body(form): body=<加密信封JSON>{cipher:{body:<真实请求体密文>}}
 | `uuid` | query | 设备 uuid（32hex），装机后恒定 | ✅ 是 | §8.2 |
 | `t` | query | 请求时刻 ms，本地生成 | n/a（本地） | 进 sign |
 | **`sign`** | query | 64hex=32B=**SHA-256 系**，**覆盖 `t`（防重放）** | ❌ **必须用新 t 重算** | **§8.7，本阶段** |
-| `ep` | query | `ciphertype:5` 加密的设备指纹信封，含 `ts` | ❓ 待定（含 ts，可能需复现） | §8.3，下阶段 |
-| `body.cipher.body` | body | `ciphertype:5` 加密的真实请求体 | ❌ 需复现加密 | §8.3，下阶段 |
+| `ep` | query | `ciphertype:5` = 换表 base64 的设备指纹（含 `ts`，自己填新值即可） | ✅ 可离线生成 | §8.3 / `color_codec.py` |
+| `body.cipher.body` | body | `ciphertype:5` 换表 base64；真实体 `{"pageSize":100,"page":1}` | ✅ 可离线生成 | §8.3 / `color_codec.py` |
 
 > **关键**：cookies/指纹稳定 ≠ 能直接重放整条请求。卡点是 `sign(t)` 的防重放（§8.7）。
 
@@ -47,14 +48,18 @@ Body(form): body=<加密信封JSON>{cipher:{body:<真实请求体密文>}}
   切 `116(eid)+32(tail)` → 落 SP 键 `c("lcJade")`/`c("field")` → 之后读 SP（§8.7）。所以稳定、可重放。
 - **tgt**：wjlogin `WUserSigInfo`（读 `createUserInfoFromJSON`/写 `toJSONObject`；落盘 `util.v.b/g`，文件名=md5(path)）。§5.6。
 
-## 5. `ep` / `body` 加密信封（待复现，下阶段）
+## 5. `ep` / `body`（已解：换表 base64，可离线生成）
 
-信封 `{hdid, ts, ridx, cipher:{…}, ciphertype:5, version:"1.2.0", appname}`；`ep.cipher` 内**逐字段加密**
-（字段语义见 §8.3，值略，均 `ciphertype:5` 密文）。`ciphertype:5` 实测**非标准 base64/AES**。
+`ciphertype:5` = **自定义字母表的标准 Base64**（不是加密）。逆向自 App `decode()`，见 [`color_codec.py`](../color_codec.py)；
+往返校验全过，**离线 decode/encode 即可，无需 hook**。
 
-**重大线索（§8.7）**：`LoadDoor.enc(String)`/`dec(String)` native **极可能就是 `ciphertype:5`**——
-若属实，可用 `frida_loaddoor_capture.js` 的 `rpc.exports.dec("<密文>")` **直接解 `ep`/`body` 密文**，
-`enc("android")` 反验，省去逆字节变换。否则回退 §8.4「发现→钉死」envelope tracer + `ENCRYPT_CLASSES`。
+- `ep.cipher` 逐字段就是明文设备指纹：`client=android` / `networkType=wifi` / `d_brand` / `d_model` /
+  `screen` / `osVersion` / `clientVersion` / `partner` / `build` / `ext={"prstate":"0"}` /
+  `eid`(=cookie devicefinger) / `aid`(=query uuid)。
+- `body.cipher.body` 明文 = **`{"pageSize":100,"page":1}`**（getHouses 就是分页）。
+
+⇒ 自造请求时：`body = color_codec.encode(json_bytes)`；`ep` 同理（`ts` 填新值再 encode）。
+（早期「必须 hook 加密」与「LoadDoor.enc/dec = ciphertype:5」的猜测均作废，见 §8.3。）
 
 ## 6. 工具与落表一览
 
@@ -66,6 +71,7 @@ Body(form): body=<加密信封JSON>{cipher:{body:<真实请求体密文>}}
 | [`frida_eid_capture.js`](../frida_eid_capture.js) | worker `e` 叶子 + getCacheTokenByBizId + 现造 | `sign`（`EID.*`） |
 | [`frida_loaddoor_capture.js`](../frida_loaddoor_capture.js) | **native** `LoadDoor` enc/dec/getToken/checkSum/getEid + SP 键 + rpc 现解 | `sign`（`LD.*`） |
 | 全部 `frida_*.js` | wjlogin 登录态读写/刷新/落盘 | `sign`（`WUserSig.*`/`WJ.*`） |
+| [`color_codec.py`](../color_codec.py) | `ciphertype:5` 离线 decode/encode（ep/body 自造） | —（纯算） |
 
 ## 7. 下一阶段：分析 query `sign`（可能 HmacSHA256，**也可能 native**）
 
