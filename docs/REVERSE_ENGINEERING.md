@@ -450,8 +450,9 @@ unionwsws = {"devicefinger":"eidA005...","jmafinger":"<同上 UUID>"}
   即 `41` = 残缺/降级态。所以抓的时候要抓一个**状态位 != 41 的“好 eid”**。
 - `jmafinger` / `whwswswws` = 同一个 **UUID**，一次生成后持久化（京东系多在 MMKV）。
 
-**战略：到此打住，别逆 native。** 这是 cookie 鉴权，eid/UUID 都是**设备级稳定值** ⇒ 正确打法是
-**抓一次、替换重放**，不是复现算法（jdguard native 白盒 + 反调试，投入产出比极低且无必要）。
+**eid = deviceFinger，绕不开**；但它是「生成一次 → 持久化 → 读取」模型（调用树见 §8.6），所以
+**逆向落点不是叶子的生成算法**，而是两条务实路线：① 找到 worker 读的 **token 持久化文件**直接拿；
+② 用 frida **驱动 SDK 现造**一个有效 eid。把 jdguard native 的生成整段复刻是天花板，一般用不到。
 
 逆向入口 [`frida_jma_capture.js`](../frida_jma_capture.js)，只 hook **输出边界 + 拼装点**，落 `sign` 表（`kind=JMA.*`）：
 
@@ -464,6 +465,39 @@ unionwsws = {"devicefinger":"eidA005...","jmafinger":"<同上 UUID>"}
   **生成 / 来源 / 刷新节奏**。
 - 找 UUID 存哪：把抓到的 UUID 填进 [`frida_trace_secret_src.js`](../frida_trace_secret_src.js) 的 `TARGETS` 跑一遍，
   命中 MMKV/SP 的 `getString` 即存储点（见 §5.4）。
+
+### 8.6 eid(deviceFinger) 内部链路与「现造」
+
+`getLogo()` 与 `getCacheTokenByBizId` 是**同一条路**（getLogo 只固定了 `scope=a.c()`、`pin=a.b()`）。按源码还原：
+
+```
+DeviceFingerUtils.a(ctx)                        # 缓存 f39083b；空 或 status[8:10]=="41" 就重取
+ └ LogoManager.getInstance(ctx).getLogo()
+    └ BiometricManager.getInstance().getCacheTokenByBizId(ctx, scope=a.c(), pin=a.b())
+       └ ff.a.l(ctx, scope, pin)
+          k(ctx)=Bundle{agreedPrivacy, tokenExist=e.l(ctx), cuid};  ThreadLocal e.f39136n=Bundle
+          scope==a.c() ? e.n(ctx) : e.j(ctx)
+             n: (!agreedPrivacy && !tokenExist) ? e.s(ctx) : e.r(ctx)
+             j: (!agreedPrivacy && !tokenExist) ? e.q(ctx) : e.p(ctx)
+          token 空: j10=e.b(ctx)(占位,常 status=41) + execute(RunnableC0575a 异步生成+持久化)
+```
+
+- eid 真正出处 = worker `e` 的叶子 `r/s/p/q/b(ctx)`；`tokenExist`(`e.l(ctx)`)决定读分支(r/p)还是生成分支(s/q)。
+- token 不存在时**同步返回占位**(`e.b`，常 `status[8:10]=41`)并**异步**(`RunnableC0575a`)生成真 token 落盘——
+  这正是 `DeviceFingerUtils` 「`==41` 就重取」的原因：第一次拿占位，异步落盘后再取才是好的。
+- 模型 = **生成一次 → 持久化 → 读取**。逆向落点：① `e.r/p` 读的 **token 文件**；② 异步生成（大概率 jdguard native）。
+
+工具 [`frida_eid_capture.js`](../frida_eid_capture.js)（落 `sign` 表 `kind=EID.*`）：
+
+1. 自动发现并 hook worker `e`（`BiometricManager.getInstance().a()` 的类）的**全部声明方法**，把
+   `r/s/p/q/b/l/n/j` 的返回值打出来——**直接看到哪个叶子吐 eid、哪个是占位、`tokenExist` 真假**；
+2. hook `getCacheTokenByBizId` 打印 `scope`/`pin` 与返回；并预调 `a.c()/a.b()` 打印 scope/pin 常量；
+3. `HOOK_FILE_IO=true` 时在 `com.jd.sec` 栈下打印**文件读写路径**——找到 token 持久化文件就能直接读 eid；
+4. **现造**：`AUTO_MINT` 定时直接调 `LogoManager.getLogo()` 现场生成有效 eid（能看到 `41` 占位 → 异步落盘
+   → 变有效 的过程）；也可 `frida -U -n <包名> -l frida_eid_capture.js` 后在 REPL `rpc.exports.minteid()`。
+
+> 实务建议：**「现造」是最划算的复现**——不重写 jdguard 算法，而是驱动 App 自带 SDK 产出 eid。
+> 配合捕获一个 `status != 41` 的好 eid，getHouses 的 `devicefinger` 就解决了。
 
 ---
 
@@ -485,6 +519,7 @@ unionwsws = {"devicefinger":"eidA005...","jmafinger":"<同上 UUID>"}
 | [`frida_sign_capture.js`](../frida_sign_capture.js) | 单独的 crypto 签名 hook（MessageDigest/Mac/Signature/Cipher/Base64） |
 | [`frida_color_capture.js`](../frida_color_capture.js) | **彩虹网关版**（api.m.jd.com）：okhttp 抓包 + SHA-256 sign + ep/body 加密信封追踪（落 `color`/`cipher` 表，见 §8） |
 | [`frida_jma_capture.js`](../frida_jma_capture.js) | **JMA/设备指纹 cookie 版**（getHouses 真正鉴权）：LogoManager.getLogo(eid) + BiometricManager 缓存 + unionwsws/Cookie 拼装（落 `sign` 表 `kind=JMA.*`，见 §8.5） |
+| [`frida_eid_capture.js`](../frida_eid_capture.js) | **eid 内部链路版**：hook worker `e` 叶子 r/s/p/q/b + getCacheTokenByBizId(scope/pin) + 可选文件 I/O + 主动现造(AUTO_MINT/rpc)（落 `sign` 表 `kind=EID.*`，见 §8.6） |
 | [`frida_trace_secret_src.js`](../frida_trace_secret_src.js) | 反查已知值（device_md 等）出处：SharedPreferences / MMKV / JSONObject |
 | [`trace_d_init.js`](../trace_d_init.js) | 一次性调试：dump `OkHttpRequest(vc.d)` 构造参数 + 调用栈 |
 | [`host.py`](../host.py) | Frida 主机：加载 hook 脚本，把记录落 SQLite（`http` + `sign` 表；彩虹网关另落 `color` + `cipher` 表） |
