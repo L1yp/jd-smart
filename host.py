@@ -349,8 +349,8 @@ def main():
                         extra = ""
                     txt = (d.get("input_txt") or "").replace("\n", " ")
                     print(f'    [WJLOGIN] {k}{extra}  data[{len(txt)}B]={txt[:70]}..')
-                elif k.startswith(("JMA.", "EID.", "LD.", "HMAC.")):
-                    # JMA cookie / eid 内部链路 / LoadDoor native / jdupgrade d.a HMAC（in=input_txt, out=out_b64）
+                elif k.startswith(("JMA.", "EID.", "LD.", "HMAC.", "SIGNI.", "NSIGN.")):
+                    # JMA cookie / eid / LoadDoor / jdupgrade d.a / 彩虹拦截器 SIGNI / native NSIGN（in=input_txt, out=out_b64|out_hex）
                     tag = k.split(".")[0]
                     val = (d.get("out_b64") or d.get("out_hex") or "").replace("\n", " ")
                     inp = (d.get("input_txt") or "").replace("\n", " ")

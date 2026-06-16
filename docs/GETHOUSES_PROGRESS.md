@@ -11,7 +11,7 @@ getHouses = **彩虹网关（api.m.jd.com）+ Cookie 设备指纹 + 每请求签
 **replay 之所以失败，不是指纹变了，而是 query 的 `sign` 覆盖了 `t`（时间戳）= 防重放**（§8.7）：
 旧 `t` + 旧 `sign` 必被判 invalid sign。所以**唯一硬骨头是「用新 `t` 重算 `sign`」**——
 `ep`/`body` 的 `ciphertype:5` 已证实是**换表 base64**（[`color_codec.py`](../color_codec.py) 可离线 decode/encode），
-**不再是障碍**。**本阶段：攻 `sign`——已下手 hook 头号嫌疑 `com.jingdong.sdk.jdupgrade.inner.utils.d.a(byte[],byte[])`（HmacSHA256），见 §7.1。**
+**不再是障碍**。**本阶段：攻 `sign`。实测：`d.a`(HmacSHA256) 只在「检查更新」走、getHouses 不经它；getHouses 真签名器 = `SignRequestInterceptor.c` + native `NativeEncodeDataToServer(_gm)`（见 §7.2），hook 已就位。**
 
 ## 2. 请求结构（详见 §8.1/§8.2）
 
@@ -66,7 +66,7 @@ Body(form): body=<加密信封JSON>{cipher:{body:<真实请求体密文>}}
 | 脚本 | 抓什么 | 落表 |
 |---|---|---|
 | [`frida_capture.js`](../frida_capture.js) | okhttp + 旧接口 sign + auth-tracer + secret-finder | `http` / `sign` |
-| [`frida_color_capture.js`](../frida_color_capture.js) | 彩虹网关 okhttp + SHA-256 sign + ep/body 加密信封 + **Part7: jdupgrade `d.a`(HmacSHA256)** | `http`→`color` / `sign`(含 `HMAC.*`) / `cipher` |
+| [`frida_color_capture.js`](../frida_color_capture.js) | 彩虹网关 okhttp + SHA-256 sign + ep/body 加密信封 + **Part7 jdupgrade `d.a`** + **Part8 真签名器(`SignRequestInterceptor`/native `NativeEncodeDataToServer`)** | `http`→`color` / `sign`(含 `HMAC.*`/`SIGNI.*`/`NSIGN.*`) / `cipher` |
 | [`frida_jma_capture.js`](../frida_jma_capture.js) | LogoManager.getLogo + BiometricManager + unionwsws/Cookie | `sign`（`JMA.*`） |
 | [`frida_eid_capture.js`](../frida_eid_capture.js) | worker `e` 叶子 + getCacheTokenByBizId + 现造 | `sign`（`EID.*`） |
 | [`frida_loaddoor_capture.js`](../frida_loaddoor_capture.js) | **native** `LoadDoor` enc/dec/getToken/checkSum/getEid + SP 键 + rpc 现解 | `sign`（`LD.*`） |
@@ -96,6 +96,9 @@ runbook：
 4. 离线复现：仿 [`verify_sign.py`](../verify_sign.py) 写 `verify_color_sign.py` 验证拼接公式。
 
 ### 7.1 sign 算法（源码已确认）+ hook：jdupgrade `c.a` / `d.a`
+
+> **实测结论**：连发 getHouses 后 `HMAC.a` 的 `out_hex` **不命中** `color.sign` —— **getHouses 不走 `d.a`**，
+> `d.a` 仅「检查更新」请求用。getHouses 的真签名器见 **§7.2**。本节作为「JD 签名套路样板」保留（值拼接 + 内嵌 secret + HMAC）。
 
 源码（`com.jingdong.sdk.jdupgrade.inner.c.a(functionId, query, body)` 调 `utils.d.a(data, key)`）：
 
@@ -136,6 +139,29 @@ SELECT s.id, s.out_hex, c.sign, c.function_id, c.t
 - 现算（用 App 自带 d.a，免对齐 gzip 字节）：`frida -U -n <包名> -l frida_color_capture.js` REPL：
   `rpc.exports.dahmac('<新 t 的 preimage>', '<secret>')` → 输出 == 新 `t` 的 wire sign 即公式正确。
 - `d` 懒加载：脚本自带 50×0.7s 重试；仍无则触发检查更新/改 attach；换版本类名变了改顶部 `UPGRADE_HMAC_CLASS`。
+
+### 7.2 getHouses 真签名器：`SignRequestInterceptor` + native `NativeEncodeDataToServer`
+
+实测 `d.a` 不参与 getHouses（§7.1）。真链路在 `com.jd.smart.networklib`，已并入 [`frida_color_capture.js`](../frida_color_capture.js) **Part 8**：
+
+- **Java 拦截器** `com.jd.smart.networklib.interceptor.SignRequestInterceptor.c(String)` —— okhttp 拦截器里的算签助手；
+  抓入参（可能是 preimage/URL）与出参（可能是 sign），落 `sign` 表 `kind=SIGNI.c`。
+- **native** `<JNI类>.NativeEncodeDataToServer(String, long, String×5, int)` 及国密变体 `NativeEncodeDataToServer_gm`，
+  返回 `byte[]`，落 `sign` 表 `kind=NSIGN.*`。8 个入参大概率含 functionId/时间戳(long)/uuid/body/appSecret/flags，抓一次即见映射。
+  类名在脚本里**留空自动发现**（按方法名在 `com.jd*`/`com.jingdong*` 里找）；从 jadx 拿到全名填 `NATIVE_SIGN_CLASS` 更稳。
+
+跑法照旧（`python host.py -p <包名> -s frida_color_capture.js --spawn` → 触发 getHouses），然后：
+
+```sql
+SELECT s.kind, s.out_hex, c.sign, c.t
+  FROM sign s JOIN color c ON lower(s.out_hex)=lower(c.sign)
+ WHERE s.kind LIKE 'NSIGN.%' OR s.kind LIKE 'SIGNI.%' ORDER BY s.id DESC;
+```
+
+- **命中** ⇒ 该方法输出即 wire sign：其 `input_txt`（native 的 8 个入参 / 拦截器入参）就是被签的料 → 反推拼接。
+- **对不上 `c.sign` 但对得上 `c.body_cipher`/`ep`** ⇒ `NativeEncodeDataToServer` 是「整体加密 data 到服务端」（含 sign 之外的料），
+  把 join 右边换成 `c.body_cipher` 再看，sign 可能是其输出的一段或另由 `SIGNI.c` 产出。
+- native 多在首个请求随 `lib*.so` 初始化才加载；脚本对拦截器/native 各自重试（50×0.7s / 40×1s）。
 
 ## 8. 再之后：`ep` / `body` 的 `ciphertype:5`
 
