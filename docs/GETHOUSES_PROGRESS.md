@@ -75,6 +75,7 @@ Body(form): body=<加密信封JSON>{cipher:{body:<真实请求体密文>}}
 | [`color_codec.py`](../color_codec.py) | `ciphertype:5` 离线 decode/encode（ep/body 自造） | —（纯算） |
 | [`verify_color_sign.py`](../verify_color_sign.py) | 离线复现 `HmacSHA256(preimage, secret)→64hex`（核对 wire sign / 换新 t 重算） | —（纯算，密钥读 `jd_smart_secrets.json`） |
 | [`color_sign.py`](../color_sign.py) | **彩虹 sign 生成器**：18 键字母序拼 preimage + HMAC-SHA256（§7.3）；`--from-db` 自动解设备档，只换 functionId/body/t | —（纯算，secret/设备档读 `jd_smart_secrets.json`） |
+| [`jd_iots_client.py`](../jd_iots_client.py) | **联网客户端**：封装 `getHouses`/`getHouseDetails`/`getAllDevices`（彩虹）+ `getHouseAddressAndWeatherInfo`（旧接口）；固定料读 `jd_smart_secrets.json`，每请求只重算 `t`/`sign`。实测 4 接口 `code/status=0` | —（联网；复用 color_codec/color_sign/query_device） |
 
 ## 7. 下一阶段：分析 query `sign`（可能 HmacSHA256，**也可能 native**）
 

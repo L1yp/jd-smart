@@ -11,6 +11,7 @@
 custom_components/jd_smart/   # ★ Home Assistant 自定义集成（要安装的就是它）
 frida_capture.js + host.py    # 抓包 + 抓签名工具（用来获取你自己的 seg1/key/tgt 等）
 query_device.py               # 独立命令行查询器（联网自测用，仅标准库）
+jd_iots_client.py             # 彩虹网关 家庭/设备/天气查询（封装 test.http，每请求只重算 t/sign）
 verify_sign.py                # 签名离线复现/校验
 jd_smart_secrets.example.json # 凭据模板（真实值放 jd_smart_secrets.json，已 .gitignore）
 docs/REVERSE_ENGINEERING.md   # 完整逆向分析笔记（协议/签名算法/方法论/排错）
