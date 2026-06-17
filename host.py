@@ -137,6 +137,30 @@ CREATE TABLE IF NOT EXISTS crypto_utils (
 CREATE INDEX IF NOT EXISTS idx_cu_method ON crypto_utils(method);
 CREATE INDEX IF NOT EXISTS idx_cu_native ON crypto_utils(is_native);
 CREATE INDEX IF NOT EXISTS idx_cu_match  ON crypto_utils(matched);
+
+-- 通用方法 hook 原始事件日志（来自 frida_generic_hook.js）。
+-- 你只改脚本顶部的 SIGNATURES 列表，这里一行 = 被 hook 方法的一次调用（入参/返回/线程/栈）。
+CREATE TABLE IF NOT EXISTS hook_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    captured_at TEXT,
+    clazz       TEXT,    -- 类全名
+    method      TEXT,    -- 方法名（构造为 $init）
+    sig         TEXT,    -- 参数类型签名，如 (String,int)
+    is_static   INTEGER,
+    is_native   INTEGER,
+    tag         TEXT,    -- 该签名在 SIGNATURES 里可选打的标签（便于 SQL 过滤）
+    args_txt    TEXT,    -- 入参可打印预览（多参用 | 分隔，已截断）
+    args_hex    TEXT,    -- 入参里 byte[] 的 hex（已截断）
+    ret_type    TEXT,    -- 返回类型（异常用 throw）
+    ret_txt     TEXT,    -- 返回值预览（异常时为异常文本）
+    ret_hex     TEXT,    -- 返回 byte[] 的 hex（已截断）
+    ret_b64     TEXT,    -- 返回 byte[] 的 base64
+    thread      TEXT,    -- 调用线程名
+    stack       TEXT     -- 调用栈（该签名开 stack 时才有值）
+);
+CREATE INDEX IF NOT EXISTS idx_hook_clazz  ON hook_log(clazz);
+CREATE INDEX IF NOT EXISTS idx_hook_method ON hook_log(method);
+CREATE INDEX IF NOT EXISTS idx_hook_tag    ON hook_log(tag);
 """
 
 
@@ -212,7 +236,8 @@ def main():
     ap.add_argument("-p", "--package", required=True,
                     help="App 包名，用 frida-ps -Uai 查（小京鱼大概类似 com.jd.smart）")
     ap.add_argument("-s", "--script", default="frida_capture.js",
-                    help="默认 frida_capture.js；彩虹网关 frida_color_capture.js；cookie/eid 用 frida_jma_capture.js / frida_eid_capture.js")
+                    help="默认 frida_capture.js；彩虹网关 frida_color_capture.js；cookie/eid 用 frida_jma_capture.js / frida_eid_capture.js；"
+                         "通用方法 hook（只改签名列表）用 frida_generic_hook.js -> hook_log 表")
     ap.add_argument("-d", "--db", default="jd_smart_traffic.db")
     ap.add_argument("--spawn", action="store_true",
                     help="spawn 启动而非 attach，能抓到启动期的登录/换票请求")
@@ -342,6 +367,25 @@ def main():
             )
             con.commit()
 
+    def insert_hook(d):
+        with db_lock:
+            con.execute(
+                "INSERT INTO hook_log(captured_at,clazz,method,sig,is_static,is_native,tag,"
+                "args_txt,args_hex,ret_type,ret_txt,ret_hex,ret_b64,thread,stack) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    d.get("clazz"), d.get("method"), d.get("sig"),
+                    1 if d.get("is_static") else 0,
+                    1 if d.get("is_native") else 0,
+                    d.get("tag"),
+                    d.get("args_txt"), d.get("args_hex"),
+                    d.get("ret_type"), d.get("ret_txt"), d.get("ret_hex"), d.get("ret_b64"),
+                    d.get("thread"), d.get("stack"),
+                ),
+            )
+            con.commit()
+
     def on_message(message, data):
         if message.get("type") == "send":
             payload = message.get("payload") or {}
@@ -424,6 +468,21 @@ def main():
                 r = ("" if r is None else r).replace("\n", " ")[:50]
                 flag = " [MATCH]" if d.get("matched") else ""
                 print(f'    [CU] {m}{sig}{nat} "{a}" -> {r}{flag}')
+            elif kind == "hook":
+                d = payload.get("data") or {}
+                try:
+                    insert_hook(d)
+                except Exception as e:
+                    print("[db error/hook]", e)
+                    return
+                m = f'{d.get("clazz")}.{d.get("method")}{d.get("sig") or ""}'
+                st = " static" if d.get("is_static") else ""
+                nat = " native" if d.get("is_native") else ""
+                tag = f' #{d.get("tag")}' if d.get("tag") else ""
+                a = (d.get("args_txt") or "").replace("\n", " ")[:80]
+                r = (d.get("ret_txt") or d.get("ret_b64") or d.get("ret_hex") or "")
+                r = ("" if r is None else r).replace("\n", " ")[:60]
+                print(f'    [HOOK]{tag} {m}{st}{nat}  in:[{a}]  out:[{r}]')
             elif kind == "error":
                 print("[script error]", payload.get("data"))
         elif message.get("type") == "log":
