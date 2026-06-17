@@ -3,13 +3,13 @@
 /*
  * frida_generic_hook.js —— 通用方法 hook：只改顶部 SIGNATURES 列表即可
  *
- * 你想 hook 哪个方法，就把它的「签名」写进下面的 SIGNATURES 数组，脚本会自动：
+ * 你想 hook 哪个方法，就把它的「签名」写进【外置文件 hook_signatures.js】（不用动本文件），脚本会自动：
  *   1) 等类加载（晚加载自动重试） -> 解析重载 -> 安装 hook；
  *   2) 每次被调用时在 console 打印一行（类.方法(签名)、入参、返回、可选调用栈）；
  *   3) 把 函数 / 入参 / 出参 / 线程 / 栈 落进 SQLite 的 hook_log 表（配 host.py，type=hook）。
  *      参数/返回【完整记录、不截断】；前 20 个入参各占一列 arg0~arg19，更多入参收进 args 字段。
  *
- * 不需要懂 frida：你只动 SIGNATURES（必要时动几个全局开关）。其它都是通用逻辑。
+ * 不需要懂 frida：你只动 hook_signatures.js 里的签名列表（必要时动本文件几个全局开关）。其它都是通用逻辑。
  *
  * ── 签名怎么写（SIGNATURES 里每一项）──────────────────────────────────────
  *   字符串形式（最常用）：
@@ -29,8 +29,11 @@
  *   （想严格匹配把 STRICT_OVERLOAD 设 true）。
  *
  * ── 用法 ────────────────────────────────────────────────────────────────
+ *   改签名：编辑 hook_signatures.js（host.py 会自动注入，无需动本文件）。
  *   落库（推荐）:  python host.py -p <包名> -s frida_generic_hook.js --spawn
+ *                  （默认读 hook_signatures.js；想换文件加 --sig-file 别的.js）
  *   仅看 console:  frida -U -f <包名> -l frida_generic_hook.js
+ *                  （standalone 不走 host.py，用本文件 DEFAULT_SIGNATURES 兜底；要用外置列表请走 host.py）
  *
  *   不知道方法签名长啥样？REPL 里枚举一个类的全部方法/构造：
  *     rpc.exports.dump("com.jd.sec.LogoManager")
@@ -43,15 +46,21 @@
  */
 
 /* =======================================================================
- *  ★ 你要改的就是这里 ★
+ *  ★ 签名列表 —— 请改外置文件 hook_signatures.js，本文件不用动 ★
+ *  host.py 加载时会把 hook_signatures.js 的内容注入到下面这行标记处
+ *  （定义 EXTERNAL_SIGNATURES）。该标记行勿删。
+ *  没有外置文件时（如 standalone 纯看 console），用 DEFAULT_SIGNATURES 兜底。
  * ======================================================================= */
-var SIGNATURES = [
-  // —— 把下面换成你要 hook 的方法即可（删掉示例、按需增删行）——
-  "com.jd.sec.LogoManager.getLogo", // 示例：无参方法，hook 全部重载
-  // 'com.foo.Bar.calc(java.lang.String,byte[])',         // 示例：指定参数重载
-  // 'com.foo.Crypto.*',                                  // 示例：某类全部方法
-  // { sig: 'com.foo.Net.send', stack: true, tag: 'net' },// 示例：带调用栈 + 打标签
+//__EXTERNAL_SIGNATURES__
+
+var DEFAULT_SIGNATURES = [
+  // 仅在「没有 hook_signatures.js」时作兜底；正常改签名请去 hook_signatures.js
+  "com.jd.sec.LogoManager.getLogo",
 ];
+var SIGNATURES =
+  typeof EXTERNAL_SIGNATURES !== "undefined" && EXTERNAL_SIGNATURES
+    ? EXTERNAL_SIGNATURES
+    : DEFAULT_SIGNATURES;
 
 /* =======================================================================
  *  全局开关（一般不用动）
@@ -820,6 +829,6 @@ Java.perform(function () {
     "\n[*] 通用 hook 已启动（落 host.py 的 hook_log 表，type=hook）。",
   );
   console.log(
-    '[*] 只改顶部 SIGNATURES 列表即可。REPL 里 rpc.exports.dump("类全名") 查签名 / rpc.exports.list() 看计数。\n',
+    '[*] 改签名只动 hook_signatures.js（host.py 自动注入）。REPL 里 rpc.exports.dump("类全名") 查签名 / rpc.exports.list() 看计数。\n',
   );
 });

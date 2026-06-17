@@ -11,6 +11,7 @@ Frida 主机：加载 hook 脚本，把抓到的请求/响应落到 SQLite，方
 """
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import threading
@@ -242,6 +243,9 @@ def main():
                     help="默认 frida_capture.js；彩虹网关 frida_color_capture.js；cookie/eid 用 frida_jma_capture.js / frida_eid_capture.js；"
                          "通用方法 hook（只改签名列表）用 frida_generic_hook.js -> hook_log 表")
     ap.add_argument("-d", "--db", default="jd_smart_traffic.db")
+    ap.add_argument("--sig-file", default="hook_signatures.js",
+                    help="frida_generic_hook.js 的外置签名列表文件；加载时自动注入到核心脚本的 "
+                         "//__EXTERNAL_SIGNATURES__ 标记处（改签名只动这个文件，不用动核心脚本）")
     ap.add_argument("--spawn", action="store_true",
                     help="spawn 启动而非 attach，能抓到启动期的登录/换票请求")
     ap.add_argument("-H", "--host", default=None,
@@ -512,6 +516,17 @@ def main():
         device = frida.get_usb_device(timeout=10)
     with open(args.script, "r", encoding="utf-8") as f:
         src = f.read()
+
+    # frida_generic_hook.js 的签名列表外置：把 --sig-file 内容注入到核心脚本的标记处，
+    # 这样改签名只动 hook_signatures.js，不用动核心脚本。其它脚本没有该标记，自动跳过。
+    SIG_MARK = "//__EXTERNAL_SIGNATURES__"
+    if SIG_MARK in src:
+        if os.path.exists(args.sig_file):
+            with open(args.sig_file, "r", encoding="utf-8") as sf:
+                src = src.replace(SIG_MARK, sf.read())
+            print(f"[*] 已注入签名文件 {args.sig_file}")
+        else:
+            print(f"[*] 未找到 {args.sig_file}，使用核心脚本内置 DEFAULT_SIGNATURES 兜底")
 
     if args.spawn:
         pid = device.spawn([args.package])
