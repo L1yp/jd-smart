@@ -15,9 +15,11 @@
  *     'pkg.Clazz.$init(android.content.Context)'  hook 指定参数的构造
  *     'pkg.Clazz.*'                               hook 该类【全部声明方法】（不含构造）
  *   对象形式（给单条加选项）：
- *     { sig: 'pkg.Clazz.method', stack: true, tag: 'login' }
+ *     { sig: 'pkg.Clazz.method', stack: true, tag: 'login', stash: true }
  *       stack=true  -> 该条每次都抓调用栈（贵，按需开）
  *       tag='xxx'   -> 落库到 hook_log.tag，方便 SQL 过滤同一类调用
+ *       stash=true  -> 命中时把 this/对象入参/对象返回 retain 进对象仓库，REPL 里用 RPC 调方法/读写字段
+ *                      （rpc.exports.objs()/fields(id)/get(id,'f')/call(id,'m',[])/set(id,'f',v)）
  *   参数类型写法很宽松：全名 'java.lang.String' / 简名 'String' / 数组 'byte[]' 或 '[B' / 基本类型 'int' 都认。
  *
  *   ★ 内部类 / 构造函数注意 ★
