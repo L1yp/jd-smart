@@ -50,10 +50,14 @@
  *       rpc.exports.set(id,'field',value)       写字段
  *     id 填类全名字符串 => 操作静态方法/字段；release(id)/clearobjs() 清仓。
  *
- *   ── 专用 RPC：现场调网银 SDK 的 p7Envelope ───────────────────────────────
- *     rpc.exports.p7envelope()            CryptoUtils.newInstance(ctx).p7Envelope(静态字段 a, content.getBytes())
+ *   ── 专用：调网银 SDK 的 p7Envelope（默认自动跑，host.py 下也能拿结果）─────────
+ *     默认 AUTO_P7=true：启动 AUTO_P7_DELAY_MS 后自动调一次（等类/Application 就绪，晚加载自动重试），
+ *       结果 send(type=hook) 落 host.py 的 hook_log 表（tag=p7）并打印一行 —— 走 host.py 无需手动调。
+ *       不想自动跑就把 AUTO_P7 设 false。查结果：SELECT * FROM hook_log WHERE tag='p7' ORDER BY id DESC;
+ *     手动/重调（standalone REPL）：
+ *       rpc.exports.p7envelope()          CryptoUtils.newInstance(ctx).p7Envelope(静态字段 a, content.getBytes())
  *                                          ctx 现取、key=CryptoUtils.a、content 默认 com.jd.iots/CCO-RISK JSON
- *     rpc.exports.p7envelope('{...}')     自定义 content 文本（其余同上）；返回 {byteLen,hex,b64,txt}
+ *       rpc.exports.p7envelope('{...}')   自定义 content 文本（其余同上）；返回 {byteLen,hex,b64,txt}
  *
  *   触发后查库：
  *     SELECT captured_at,clazz,method,sig,arg0,arg1,arg2,ret_txt,ret_b64 FROM hook_log ORDER BY id DESC LIMIT 50;
@@ -926,6 +930,13 @@ var CU_CLASS = "com.wangyin.platform.CryptoUtils";
 var P7_CONTENT =
   '{"appId":"com.jd.iots","bizId":"CCO-RISK","deviceInfo":{"sdk_version":"8.1.0"}}';
 
+/* 自动触发（让走 host.py 无 REPL 也能拿到结果，不必手动调 rpc.exports.p7envelope）：
+ *   AUTO_P7=false 则只保留手动 RPC 入口。--spawn 冷启动建议 DELAY ≥ 5000 给 SDK 初始化时间。 */
+var AUTO_P7 = true;
+var AUTO_P7_DELAY_MS = 6000; // 首次尝试前延迟
+var AUTO_P7_RETRY_MS = 1500, // 类/Application 未就绪时的重试间隔
+  AUTO_P7_RETRY_MAX = 40; // 重试次数上限
+
 function callP7Envelope(contentStr) {
   var res;
   Java.perform(function () {
@@ -987,6 +998,28 @@ function callP7Envelope(contentStr) {
           of.type +
           ")",
       );
+
+      /* 落库：send(type=hook) -> host.py 写 hook_log 表 + 打印一行（tag=p7 便于过滤）。
+         这样走 host.py（无 REPL）也能拿到结果，不必手动调。 */
+      var a0 = argStr(key),
+        a1 = contentStr;
+      emit({
+        clazz: CU_CLASS,
+        method: "p7Envelope",
+        sig: "(via newInstance(ctx))",
+        is_static: 0,
+        is_native: 0,
+        tag: "p7",
+        arg0: a0,
+        arg1: a1,
+        args: "a0(key)=" + (a0 === null ? "null" : a0) + " | a1(content)=" + a1,
+        ret_type: of.type,
+        ret_txt: of.txt,
+        ret_hex: of.hex,
+        ret_b64: of.b64,
+        thread: THREAD_NAME ? curThread() : null,
+        stack: null,
+      });
       res = rpcVal(out);
     } catch (e) {
       res = "[p7] 调用失败: " + e + "\n" + (e.stack || "");
@@ -994,6 +1027,37 @@ function callP7Envelope(contentStr) {
     }
   });
   return res;
+}
+
+/* 启动后自动调一次：等 CryptoUtils 类 + Application 都就绪再触发（晚加载自动重试） */
+function autoP7() {
+  var tries = 0;
+  (function attempt() {
+    var ready = false;
+    Java.perform(function () {
+      ready =
+        !!safe(function () {
+          return Java.use(CU_CLASS);
+        }, null) &&
+        !!safe(function () {
+          return Java.use("android.app.ActivityThread").currentApplication();
+        }, null);
+    });
+    if (ready) {
+      console.log("[p7] 自动触发 p7Envelope（关：AUTO_P7=false；重调：rpc.exports.p7envelope()）");
+      safe(function () {
+        return callP7Envelope();
+      });
+      return;
+    }
+    if (++tries <= AUTO_P7_RETRY_MAX) setTimeout(attempt, AUTO_P7_RETRY_MS);
+    else
+      console.log(
+        "[p7] 放弃自动触发：" +
+          CU_CLASS +
+          " / Application 一直未就绪（在 App 里操作让 SDK 加载，或 rpc.exports.p7envelope() 手动调）",
+      );
+  })();
 }
 
 /* =======================================================================
@@ -1313,6 +1377,15 @@ Java.perform(function () {
       Java.perform(armAll);
     }, ARM_DELAY_MS);
   } else armAll();
+
+  if (AUTO_P7) {
+    console.log(
+      "[p7] " +
+        AUTO_P7_DELAY_MS +
+        "ms 后自动调 CryptoUtils.newInstance(ctx).p7Envelope(a, content)，结果落 hook_log(tag=p7)",
+    );
+    setTimeout(autoP7, AUTO_P7_DELAY_MS);
+  }
 
   console.log(
     "\n[*] 通用 hook 已启动（落 host.py 的 hook_log 表，type=hook）。",
