@@ -24,10 +24,56 @@
  *
  *   不知道签名长啥样？frida REPL 里：rpc.exports.dump("com.jd.sec.LogoManager")
  * ========================================================================== */
-var EXTERNAL_SIGNATURES = [
+
+var deviceFingerSignatures = [
   // —— 在这里增删你要 hook 的方法 ——
-  "com.jd.sec.LogoManager.getLogo", // 示例：无参方法，hook 全部重载
+  //"com.jd.sec.LogoManager.getLogo", // 示例：无参方法，hook 全部重载
   // 'com.foo.Bar.calc(java.lang.String,byte[])',          // 指定参数重载
   // 'com.foo.Crypto.*',                                   // 某类全部方法
-  // { sig: 'com.foo.Net.send', stack: true, tag: 'net' }, // 带调用栈 + 打标签
+  {
+    // 非静态内部类构造：内部类名用 $（gf.b$a），构造方法用 .$init（要用 . 跟类名分开，不能写成 $a$init）；
+    // 首参 gf.b 是编译器给非静态内部类自动加的"外部类实例"（源码里看不到）
+    sig: "gf.b$a.$init(gf.b,android.os.Bundle,android.content.Context,String,String)",
+    stack: true,
+    tag: "eid",
+  },
+  {
+    sig: "gf.b.g(android.content.Context,String,String)",
+    stack: false,
+    tag: "eid",
+  },
+  {
+    sig: "gf.b.c(android.content.Context,String,String,cf.a)",
+    stack: false,
+    tag: "eid",
+  },
+  {
+    sig: "ef.d.g(android.content.Context,String,org.json.JSONObject,String)",
+    stack: false,
+    tag: "eid",
+  },
+  {
+    sig: "ef.d.f(android.content.Context,String,org.json.JSONObject,String)",
+    stack: false,
+    tag: "eid",
+  },
+  {
+    sig: "ef.d.g(android.content.Context,String,String)",
+    stack: false,
+    tag: "eid",
+  },
+  // d(Context context, String str, long j10, long j11, String str2, String str3)
+  {
+    sig: "ff.e.d(android.content.Context,String,long,long,String,String)",
+    stack: false,
+    tag: "eid",
+  },
+  // h(Context context, String str, long j10, long j11, String str2, String str3)
+  {
+    sig: "ff.e.h(android.content.Context,String,long,long,String,String)",
+    stack: false,
+    tag: "eid",
+  },
 ];
+
+var EXTERNAL_SIGNATURES = deviceFingerSignatures;
