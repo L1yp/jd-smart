@@ -55,8 +55,8 @@
  *       结果 send(type=hook) 落 host.py 的 hook_log 表（tag=p7）并打印一行 —— 走 host.py 无需手动调。
  *       不想自动跑就把 AUTO_P7 设 false。查结果：SELECT * FROM hook_log WHERE tag='p7' ORDER BY id DESC;
  *     手动/重调（standalone REPL）：
- *       rpc.exports.p7envelope()          CryptoUtils.newInstance(ctx).p7Envelope(静态字段 a, content.getBytes())
- *                                          ctx 现取、key=CryptoUtils.a、content 默认 com.jd.iots/CCO-RISK JSON
+ *       rpc.exports.p7envelope()          CryptoUtils.newInstance(ctx).p7Envelope(静态字段 of.d.a, content.getBytes())
+ *                                          ctx 现取、key=of.d.a、content 默认 com.jd.iots/CCO-RISK JSON
  *       rpc.exports.p7envelope('{...}')   自定义 content 文本（其余同上）；返回 {byteLen,hex,b64,txt}
  *
  *   触发后查库：
@@ -918,15 +918,16 @@ function rpcVal(x) {
 }
 
 /* =======================================================================
- *  专用调用：com.wangyin.platform.CryptoUtils.newInstance(ctx).p7Envelope(a, content)
+ *  专用调用：com.wangyin.platform.CryptoUtils.newInstance(ctx).p7Envelope(key, content)
  *    - context  ：现取 ActivityThread.currentApplication().getApplicationContext()
- *    - key      ：静态字段 CryptoUtils.a（用反射读，规避「字段/同名方法」歧义；含父类/私有）
+ *    - key      ：静态字段 of.d.a（用反射读，规避「字段 a / 同名方法 a」歧义；含父类/私有）
  *    - content  ：指定 JSON 的 String.getBytes()（Java 平台默认字符集，安卓=UTF-8）
  *  返回 p7Envelope 的结果（byte[] -> {byteLen,hex,b64,txt}），便于离线复用。
  *  REPL：rpc.exports.p7envelope()                       // 用下方默认 content
  *        rpc.exports.p7envelope('{"appId":"..."}')      // 自定义 content 文本
  * ======================================================================= */
 var CU_CLASS = "com.wangyin.platform.CryptoUtils";
+var KEY_CLASS = "of.d"; // 静态字段 of.d.a = p7Envelope 的 key（param1）
 var P7_CONTENT =
   '{"appId":"com.jd.iots","bizId":"CCO-RISK","deviceInfo":{"sdk_version":"8.1.0"}}';
 
@@ -958,10 +959,18 @@ function callP7Envelope(contentStr) {
         return;
       }
 
-      /* key = 静态字段 a（反射读，避开「字段 a / 方法 a」同名歧义；setAccessible 处理私有） */
-      var keyField = findField(C.class, "a");
+      /* key = of.d 的静态字段 a（反射读，避开「字段 a / 方法 a」同名歧义；setAccessible 处理私有） */
+      var KC = safe(function () {
+        return Java.use(KEY_CLASS);
+      }, null);
+      if (!KC) {
+        res = "[p7] key 类未加载: " + KEY_CLASS + "（触发让其加载后再调）";
+        console.log(res);
+        return;
+      }
+      var keyField = findField(KC.class, "a");
       if (!keyField) {
-        res = "[p7] 找不到静态字段 " + CU_CLASS + ".a";
+        res = "[p7] 找不到静态字段 " + KEY_CLASS + ".a";
         console.log(res);
         return;
       }
@@ -981,7 +990,7 @@ function callP7Envelope(contentStr) {
       );
       console.log("   ctx     = " + ctx);
       console.log(
-        "   key(a)  = " +
+        "   key(of.d.a) = " +
           (kf.txt === null ? "null" : kf.txt) +
           (kf.hex ? "  hex=" + kf.hex : "") +
           "  (" +
@@ -1038,6 +1047,9 @@ function autoP7() {
       ready =
         !!safe(function () {
           return Java.use(CU_CLASS);
+        }, null) &&
+        !!safe(function () {
+          return Java.use(KEY_CLASS);
         }, null) &&
         !!safe(function () {
           return Java.use("android.app.ActivityThread").currentApplication();
