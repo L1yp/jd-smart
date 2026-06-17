@@ -526,7 +526,8 @@ def main():
                 src = src.replace(SIG_MARK, sf.read())
             print(f"[*] 已注入签名文件 {args.sig_file}")
         else:
-            print(f"[*] 未找到 {args.sig_file}，使用核心脚本内置 DEFAULT_SIGNATURES 兜底")
+            print(f"[*] 未找到 {args.sig_file}（可 copy hook_signatures.example.js 为 hook_signatures.js 再改），"
+                  f"暂用核心脚本内置 DEFAULT_SIGNATURES 兜底")
 
     if args.spawn:
         pid = device.spawn([args.package])

@@ -6,6 +6,9 @@
 # 本地真实凭据 —— 绝不提交（example 模板可提交）
 jd_smart_secrets.json
 
+# 通用 hook 的本地签名列表（含个人逆向目标，按 hook_signatures.example.js 复制后改）
+hook_signatures.js
+
 # 调试用真实请求脚本（REST client / .http，常含 cookie/tgt/sign 等实时凭据）
 *.http
 
