@@ -50,6 +50,11 @@
  *       rpc.exports.set(id,'field',value)       写字段
  *     id 填类全名字符串 => 操作静态方法/字段；release(id)/clearobjs() 清仓。
  *
+ *   ── 专用 RPC：现场调网银 SDK 的 p7Envelope ───────────────────────────────
+ *     rpc.exports.p7envelope()            CryptoUtils.newInstance(ctx).p7Envelope(静态字段 a, content.getBytes())
+ *                                          ctx 现取、key=CryptoUtils.a、content 默认 com.jd.iots/CCO-RISK JSON
+ *     rpc.exports.p7envelope('{...}')     自定义 content 文本（其余同上）；返回 {byteLen,hex,b64,txt}
+ *
  *   触发后查库：
  *     SELECT captured_at,clazz,method,sig,arg0,arg1,arg2,ret_txt,ret_b64 FROM hook_log ORDER BY id DESC LIMIT 50;
  *     SELECT clazz,method,args,ret_txt FROM hook_log WHERE tag='login';   -- args = 全部入参完整 dump
@@ -909,6 +914,89 @@ function rpcVal(x) {
 }
 
 /* =======================================================================
+ *  专用调用：com.wangyin.platform.CryptoUtils.newInstance(ctx).p7Envelope(a, content)
+ *    - context  ：现取 ActivityThread.currentApplication().getApplicationContext()
+ *    - key      ：静态字段 CryptoUtils.a（用反射读，规避「字段/同名方法」歧义；含父类/私有）
+ *    - content  ：指定 JSON 的 String.getBytes()（Java 平台默认字符集，安卓=UTF-8）
+ *  返回 p7Envelope 的结果（byte[] -> {byteLen,hex,b64,txt}），便于离线复用。
+ *  REPL：rpc.exports.p7envelope()                       // 用下方默认 content
+ *        rpc.exports.p7envelope('{"appId":"..."}')      // 自定义 content 文本
+ * ======================================================================= */
+var CU_CLASS = "com.wangyin.platform.CryptoUtils";
+var P7_CONTENT =
+  '{"appId":"com.jd.iots","bizId":"CCO-RISK","deviceInfo":{"sdk_version":"8.1.0"}}';
+
+function callP7Envelope(contentStr) {
+  var res;
+  Java.perform(function () {
+    try {
+      contentStr =
+        contentStr === undefined || contentStr === null
+          ? P7_CONTENT
+          : "" + contentStr;
+
+      var ctx = Java.use("android.app.ActivityThread")
+        .currentApplication()
+        .getApplicationContext();
+      var C = safe(function () {
+        return Java.use(CU_CLASS);
+      }, null);
+      if (!C) {
+        res = "[p7] 类未加载: " + CU_CLASS + "（触发让其加载后再调）";
+        console.log(res);
+        return;
+      }
+
+      /* key = 静态字段 a（反射读，避开「字段 a / 方法 a」同名歧义；setAccessible 处理私有） */
+      var keyField = findField(C.class, "a");
+      if (!keyField) {
+        res = "[p7] 找不到静态字段 " + CU_CLASS + ".a";
+        console.log(res);
+        return;
+      }
+      var key = getFieldVal(keyField, null);
+
+      /* content = "...".getBytes()（用真 Java String 的默认字符集字节，忠实复刻 .getBytes()） */
+      var content = Java.use("java.lang.String").$new(contentStr).getBytes();
+
+      /* newInstance(ctx).p7Envelope(key, content)（重载由 Frida 按实参类型自动解析） */
+      var inst = C.newInstance(ctx);
+      var out = inst.p7Envelope(key, content);
+
+      var kf = fmtVal(key),
+        of = fmtVal(out);
+      console.log(
+        "\n[p7] " + CU_CLASS + ".newInstance(ctx).p7Envelope(a, content)",
+      );
+      console.log("   ctx     = " + ctx);
+      console.log(
+        "   key(a)  = " +
+          (kf.txt === null ? "null" : kf.txt) +
+          (kf.hex ? "  hex=" + kf.hex : "") +
+          "  (" +
+          kf.type +
+          ")",
+      );
+      console.log("   content = " + contentStr);
+      console.log(
+        "   ret     = " +
+          (of.txt === null ? "null" : of.txt) +
+          (of.hex ? "  hex=" + of.hex : "") +
+          (of.b64 ? "  b64=" + of.b64 : "") +
+          "  (" +
+          of.type +
+          ")",
+      );
+      res = rpcVal(out);
+    } catch (e) {
+      res = "[p7] 调用失败: " + e + "\n" + (e.stack || "");
+      console.log(res);
+    }
+  });
+  return res;
+}
+
+/* =======================================================================
  *  RPC：辅助查方法签名 / 看命中计数 / 用 hook 现场暂存的活对象调方法读写字段
  * ======================================================================= */
 rpc.exports = {
@@ -1187,6 +1275,12 @@ rpc.exports = {
     OBJ_ORDER = [];
     OBJ_SEQ = 0;
     return "对象仓库已清空";
+  },
+
+  /* 专用：调 CryptoUtils.newInstance(ctx).p7Envelope(静态字段 a, content.getBytes())
+     content 省略=默认 JSON；返回 {byteLen,hex,b64,txt}（byte[]）或原始值，便于离线复用 */
+  p7envelope: function (content) {
+    return callP7Envelope(content);
   },
 };
 
