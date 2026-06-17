@@ -50,14 +50,17 @@
  *       rpc.exports.set(id,'field',value)       写字段
  *     id 填类全名字符串 => 操作静态方法/字段；release(id)/clearobjs() 清仓。
  *
- *   ── 专用：调网银 SDK 的 p7Envelope（默认自动跑，host.py 下也能拿结果）─────────
- *     默认 AUTO_P7=true：启动 AUTO_P7_DELAY_MS 后自动调一次（等类/Application 就绪，晚加载自动重试），
- *       结果 send(type=hook) 落 host.py 的 hook_log 表（tag=p7）并打印一行 —— 走 host.py 无需手动调。
- *       不想自动跑就把 AUTO_P7 设 false。查结果：SELECT * FROM hook_log WHERE tag='p7' ORDER BY id DESC;
+ *   ── 专用：调网银 SDK 的 p7Envelope / of.d.a（默认自动跑，host.py 下也能拿结果）───
+ *     默认 AUTO_P7=true：启动 AUTO_P7_DELAY_MS 后自动跑套件（等类/Application 就绪，晚加载自动重试）：
+ *       p7Envelope 与 of.d.a 各【连调 2 次】，看各自输出是否稳定（一致=可重放；不一致=有时间戳/随机）。
+ *       结果 send(type=hook) 落 hook_log：原始输出 tag=p7（p7Envelope）/ tag=ofda（of.d.a），结论 tag=p7cmp。
+ *       不想自动跑就把 AUTO_P7 设 false。查结果：
+ *         SELECT method,ret_txt,ret_hex FROM hook_log WHERE tag IN('p7','ofda','p7cmp') ORDER BY id DESC;
  *     手动/重调（standalone REPL）：
- *       rpc.exports.p7envelope()          CryptoUtils.newInstance(ctx).p7Envelope(静态字段 of.d.a, content.getBytes())
- *                                          ctx 现取、key=of.d.a、content 默认 com.jd.iots/CCO-RISK JSON
- *       rpc.exports.p7envelope('{...}')   自定义 content 文本（其余同上）；返回 {byteLen,hex,b64,txt}
+ *       rpc.exports.p7suite()             两者各连调 2 次（同自动跑）
+ *       rpc.exports.p7envelope([content]) CryptoUtils.newInstance(ctx).p7Envelope(静态字段 of.d.a, content.getBytes())
+ *       rpc.exports.ofda([content])       of.d.a(ctx, content.getBytes())  —— of.d 的方法 a(Context,byte[])
+ *                                          content 省略=默认 com.jd.iots/CCO-RISK JSON；返回 {byteLen,hex,b64,txt}
  *
  *   触发后查库：
  *     SELECT captured_at,clazz,method,sig,arg0,arg1,arg2,ret_txt,ret_b64 FROM hook_log ORDER BY id DESC LIMIT 50;
@@ -1038,6 +1041,127 @@ function callP7Envelope(contentStr) {
   return res;
 }
 
+/* 新增主动调用：of.d.a(ctx, content)——of.d 的方法 a(Context,byte[])（与 p7Envelope 对照/独立验证）。
+ * 默认按「静态方法」调（of.d.a(...) 的写法即静态）；落库 tag=ofda。 */
+function callOfdA(contentStr) {
+  var res;
+  Java.perform(function () {
+    try {
+      contentStr =
+        contentStr === undefined || contentStr === null
+          ? P7_CONTENT
+          : "" + contentStr;
+
+      var ctx = Java.use("android.app.ActivityThread")
+        .currentApplication()
+        .getApplicationContext();
+      var KC = safe(function () {
+        return Java.use(KEY_CLASS);
+      }, null);
+      if (!KC) {
+        res = "[ofda] 类未加载: " + KEY_CLASS + "（触发让其加载后再调）";
+        console.log(res);
+        return;
+      }
+
+      var content = Java.use("java.lang.String").$new(contentStr).getBytes();
+      var out = KC.a(ctx, content); // of.d.a(Context, byte[])（重载按实参类型自动解析）
+
+      var rv = fmtVal(out);
+      console.log("\n[ofda] " + KEY_CLASS + ".a(ctx, content)");
+      console.log("   content = " + contentStr);
+      console.log(
+        "   ret     = " +
+          (rv.txt === null ? "null" : rv.txt) +
+          (rv.hex ? "  hex=" + rv.hex : "") +
+          (rv.b64 ? "  b64=" + rv.b64 : "") +
+          "  (" +
+          rv.type +
+          ")",
+      );
+      emit({
+        clazz: KEY_CLASS,
+        method: "a",
+        sig: "(Context,byte[])",
+        is_static: 0,
+        is_native: 0,
+        tag: "ofda",
+        arg0: "ctx",
+        arg1: contentStr,
+        args: "a0=ctx | a1(content)=" + contentStr,
+        ret_type: rv.type,
+        ret_txt: rv.txt,
+        ret_hex: rv.hex,
+        ret_b64: rv.b64,
+        thread: THREAD_NAME ? curThread() : null,
+        stack: null,
+      });
+      res = rpcVal(out);
+    } catch (e) {
+      res = "[ofda] 调用失败: " + e + "\n" + (e.stack || "");
+      console.log(res);
+    }
+  });
+  return res;
+}
+
+/* 把 rpcVal 结果归一成「可比较字符串」：byte[]->hex；基本类型->原值；对象->repr */
+function cmpKey(r) {
+  if (r === null || r === undefined) return "null";
+  var t = typeof r;
+  if (t === "string" || t === "number" || t === "boolean") return "" + r;
+  if (r.hex) return r.hex;
+  if (r.b64) return r.b64;
+  if (r.txt) return r.txt;
+  if (r.repr !== undefined) return "" + r.repr;
+  return JSON.stringify(r);
+}
+
+/* 一个调用连发 2 次的结论：打印 + 落库（tag=p7cmp）是否一致 */
+function reportPair(name, clazz, k1, k2) {
+  var same = k1 === k2;
+  console.log(
+    "\n[p7][" +
+      name +
+      "] 连调 2 次 -> " +
+      (same
+        ? "结果一致 ✓（确定性，可整块重放）"
+        : "结果不一致 ✗（每次变化：含时间戳/随机/nonce）"),
+  );
+  console.log("   #1 = " + k1);
+  console.log("   #2 = " + k2);
+  emit({
+    clazz: clazz,
+    method: name + " x2",
+    sig: same ? "(stable)" : "(changes)",
+    is_static: 0,
+    is_native: 0,
+    tag: "p7cmp",
+    arg0: k1,
+    arg1: k2,
+    args: "#1=" + k1 + " | #2=" + k2,
+    ret_type: "compare",
+    ret_txt: same ? "SAME" : "DIFF",
+    ret_hex: null,
+    ret_b64: null,
+    thread: THREAD_NAME ? curThread() : null,
+    stack: null,
+  });
+  return same;
+}
+
+/* 套件：p7Envelope 与 of.d.a 各连调 2 次，看各自输出是否稳定（每次原始结果也各自落库） */
+function p7Suite() {
+  console.log("\n[p7] ===== p7Envelope / of.d.a 各连调 2 次，看输出是否稳定 =====");
+  var a1 = cmpKey(callP7Envelope());
+  var a2 = cmpKey(callP7Envelope());
+  reportPair("p7Envelope", CU_CLASS, a1, a2);
+  var b1 = cmpKey(callOfdA());
+  var b2 = cmpKey(callOfdA());
+  reportPair("of.d.a", KEY_CLASS, b1, b2);
+  console.log("[p7] ============================================================\n");
+}
+
 /* 启动后自动调一次：等 CryptoUtils 类 + Application 都就绪再触发（晚加载自动重试） */
 function autoP7() {
   var tries = 0;
@@ -1056,9 +1180,11 @@ function autoP7() {
         }, null);
     });
     if (ready) {
-      console.log("[p7] 自动触发 p7Envelope（关：AUTO_P7=false；重调：rpc.exports.p7envelope()）");
+      console.log(
+        "[p7] 自动触发：p7Envelope 与 of.d.a 各连调 2 次比对（关：AUTO_P7=false；重调：rpc.exports.p7suite()）",
+      );
       safe(function () {
-        return callP7Envelope();
+        p7Suite();
       });
       return;
     }
@@ -1353,10 +1479,19 @@ rpc.exports = {
     return "对象仓库已清空";
   },
 
-  /* 专用：调 CryptoUtils.newInstance(ctx).p7Envelope(静态字段 a, content.getBytes())
+  /* 专用：调 CryptoUtils.newInstance(ctx).p7Envelope(静态字段 of.d.a, content.getBytes())
      content 省略=默认 JSON；返回 {byteLen,hex,b64,txt}（byte[]）或原始值，便于离线复用 */
   p7envelope: function (content) {
     return callP7Envelope(content);
+  },
+  /* 专用：调 of.d.a(ctx, content.getBytes())（of.d 的方法 a(Context,byte[])） */
+  ofda: function (content) {
+    return callOfdA(content);
+  },
+  /* 套件：p7Envelope 与 of.d.a 各连调 2 次，看输出是否稳定（结果见 console / hook_log） */
+  p7suite: function () {
+    p7Suite();
+    return "done（看 console；查库：SELECT method,ret_txt,ret_hex FROM hook_log WHERE tag IN('p7','ofda','p7cmp') ORDER BY id DESC）";
   },
 };
 
@@ -1394,7 +1529,7 @@ Java.perform(function () {
     console.log(
       "[p7] " +
         AUTO_P7_DELAY_MS +
-        "ms 后自动调 CryptoUtils.newInstance(ctx).p7Envelope(a, content)，结果落 hook_log(tag=p7)",
+        "ms 后自动调：p7Envelope 与 of.d.a 各连调 2 次比对，结果落 hook_log(tag=p7/ofda/p7cmp)",
     );
     setTimeout(autoP7, AUTO_P7_DELAY_MS);
   }
