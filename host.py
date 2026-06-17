@@ -149,12 +149,15 @@ CREATE TABLE IF NOT EXISTS hook_log (
     is_static   INTEGER,
     is_native   INTEGER,
     tag         TEXT,    -- 该签名在 SIGNATURES 里可选打的标签（便于 SQL 过滤）
-    args_txt    TEXT,    -- 入参可打印预览（多参用 | 分隔，已截断）
-    args_hex    TEXT,    -- 入参里 byte[] 的 hex（已截断）
+    arg0  TEXT, arg1  TEXT, arg2  TEXT, arg3  TEXT, arg4  TEXT,
+    arg5  TEXT, arg6  TEXT, arg7  TEXT, arg8  TEXT, arg9  TEXT,
+    arg10 TEXT, arg11 TEXT, arg12 TEXT, arg13 TEXT, arg14 TEXT,
+    arg15 TEXT, arg16 TEXT, arg17 TEXT, arg18 TEXT, arg19 TEXT,  -- 前 20 个入参各一列（完整，不截断）
+    args        TEXT,    -- 全部入参完整 dump（a0=..|a1=..；含第 21 个起的溢出），不截断
     ret_type    TEXT,    -- 返回类型（异常用 throw）
-    ret_txt     TEXT,    -- 返回值预览（异常时为异常文本）
-    ret_hex     TEXT,    -- 返回 byte[] 的 hex（已截断）
-    ret_b64     TEXT,    -- 返回 byte[] 的 base64
+    ret_txt     TEXT,    -- 返回值（完整，不截断；异常时为异常文本）
+    ret_hex     TEXT,    -- 返回 byte[] 的完整 hex
+    ret_b64     TEXT,    -- 返回 byte[] 的完整 base64
     thread      TEXT,    -- 调用线程名
     stack       TEXT     -- 调用栈（该签名开 stack 时才有值）
 );
@@ -249,6 +252,12 @@ def main():
     # 连接在主线程创建，必须放开同线程校验；db_lock 保证写入串行。
     con = sqlite3.connect(args.db, check_same_thread=False)
     con.executescript(DDL)
+    # 兼容老库：旧版 hook_log 用 args_txt/args_hex，没有 arg0..arg19/args；按需补列
+    # （SQLite 的 CREATE TABLE IF NOT EXISTS 不会改已存在表的结构，只能 ALTER 增列）
+    have_hook = {r[1] for r in con.execute("PRAGMA table_info(hook_log)")}
+    for col in [f"arg{i}" for i in range(20)] + ["args"]:
+        if col not in have_hook:
+            con.execute(f"ALTER TABLE hook_log ADD COLUMN {col} TEXT")
     con.commit()
     db_lock = threading.Lock()
 
@@ -368,21 +377,22 @@ def main():
             con.commit()
 
     def insert_hook(d):
+        cols = (["captured_at", "clazz", "method", "sig", "is_static", "is_native", "tag"]
+                + [f"arg{i}" for i in range(20)]
+                + ["args", "ret_type", "ret_txt", "ret_hex", "ret_b64", "thread", "stack"])
+        vals = ([
+            time.strftime("%Y-%m-%dT%H:%M:%S"),
+            d.get("clazz"), d.get("method"), d.get("sig"),
+            1 if d.get("is_static") else 0,
+            1 if d.get("is_native") else 0,
+            d.get("tag"),
+        ] + [d.get(f"arg{i}") for i in range(20)]
+            + [d.get("args"), d.get("ret_type"), d.get("ret_txt"),
+               d.get("ret_hex"), d.get("ret_b64"), d.get("thread"), d.get("stack")])
         with db_lock:
             con.execute(
-                "INSERT INTO hook_log(captured_at,clazz,method,sig,is_static,is_native,tag,"
-                "args_txt,args_hex,ret_type,ret_txt,ret_hex,ret_b64,thread,stack) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    d.get("clazz"), d.get("method"), d.get("sig"),
-                    1 if d.get("is_static") else 0,
-                    1 if d.get("is_native") else 0,
-                    d.get("tag"),
-                    d.get("args_txt"), d.get("args_hex"),
-                    d.get("ret_type"), d.get("ret_txt"), d.get("ret_hex"), d.get("ret_b64"),
-                    d.get("thread"), d.get("stack"),
-                ),
+                f"INSERT INTO hook_log({','.join(cols)}) VALUES({','.join(['?'] * len(cols))})",
+                vals,
             )
             con.commit()
 
@@ -479,9 +489,14 @@ def main():
                 st = " static" if d.get("is_static") else ""
                 nat = " native" if d.get("is_native") else ""
                 tag = f' #{d.get("tag")}' if d.get("tag") else ""
-                a = (d.get("args_txt") or "").replace("\n", " ")[:80]
+                # 落库是完整的；这里仅做一行可读的扫描提示，故对超长值做截断显示（不影响入库）
+                a = (d.get("args") or "").replace("\n", " ")
+                if len(a) > 80:
+                    a = a[:80] + f"..(+{len(a) - 80})"
                 r = (d.get("ret_txt") or d.get("ret_b64") or d.get("ret_hex") or "")
-                r = ("" if r is None else r).replace("\n", " ")[:60]
+                r = ("" if r is None else r).replace("\n", " ")
+                if len(r) > 60:
+                    r = r[:60] + ".."
                 print(f'    [HOOK]{tag} {m}{st}{nat}  in:[{a}]  out:[{r}]')
             elif kind == "error":
                 print("[script error]", payload.get("data"))
