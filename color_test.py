@@ -22,13 +22,14 @@ jd_smart_secrets.json 需要的字段（彩虹网关）:
       color_jmafinger     Cookie 的 whwswswws / jmafinger（一个 UUID）
       tgt                 登录票据（会过期，需刷新）
     设备档（二选一）:
-      ① color_profile（推荐，明文易改）+ color_ep_hdid
+      ① color_profile（推荐，明文易改）
          color_profile = {aid,uuid,appid,area,build,client,clientVersion,d_brand,
                           d_model,eid,ext,networkType,osVersion,partner,screen}
-         color_ep_hdid = ep 信封的 hdid（一串 base64 token，原样填）
       ② color_ep（旧格式，抓包的 ciphertype:5 密文信封，自动解出 profile）
-    可选:
-      color_body_hdid     不填则自动按 base64(sha256(eid)) 派生
+    可选（两个 hdid 都能省）:
+      color_body_hdid   不填则自动按 base64(sha256(eid)) 派生
+      color_ep_hdid     ep 信封 hdid；不填留空——读接口(getHouses/getAllDevices)实测可用，
+                        写/绑定接口若报错再补抓包原值（它哈希的是永久 id，推不出来）
 
     没有明文 color_profile？跑一次把现有密文 color_ep 转成可粘贴的明文块:
         python color_test.py --dump-profile
@@ -103,7 +104,9 @@ def _load_client(color_api, secrets_path):
         # ① 明文设备档（推荐）：ep_hdid 取 color_ep_hdid，或仍兼容从 color_ep.hdid 拿
         ep_hdid = cfg.get("color_ep_hdid") or (cfg.get("color_ep") or {}).get("hdid", "")
         if not _filled(ep_hdid):
-            sys.exit(f"[!] {name} 有 color_profile 但缺 color_ep_hdid（ep 信封 hdid token）。")
+            ep_hdid = ""   # ep 不进 sign：读接口(getHouses/getAllDevices)实测留空也 code=0
+            print(f"[i] {name} 未填 color_ep_hdid：ep.hdid 留空（读接口可用；写/绑定接口如报错再补抓包原值）。",
+                  file=sys.stderr)
         return color_api.JdColorClient(None, profile=prof, ep_hdid=ep_hdid, **common)
 
     ep = cfg.get("color_ep")
