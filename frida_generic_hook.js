@@ -50,6 +50,10 @@
  *       rpc.exports.set(id,'field',value)       写字段
  *     id 填类全名字符串 => 操作静态方法/字段；release(id)/clearobjs() 清仓。
  *
+ *   ── 主动调用要 Context？核心脚本 getAppContext() 两条途径自动兜底──────────────
+ *       1) ActivityThread.currentApplication().getApplicationContext()   2) jd.wjlogin_sdk.common.b.a()
+ *       REPL 手动取一份： rpc.exports.context()
+ *
  *   ── 专用：调网银 SDK 的 p7Envelope / of.d.a（默认自动跑，host.py 下也能拿结果）───
  *     默认 AUTO_P7=true：启动 AUTO_P7_DELAY_MS 后自动跑套件（等类/Application 就绪，晚加载自动重试）：
  *       p7Envelope 与 of.d.a 各【连调 2 次】，看各自输出是否稳定（一致=可重放；不一致=有时间戳/随机）。
@@ -922,13 +926,31 @@ function rpcVal(x) {
 
 /* =======================================================================
  *  专用调用：com.wangyin.platform.CryptoUtils.newInstance(ctx).p7Envelope(key, content)
- *    - context  ：现取 ActivityThread.currentApplication().getApplicationContext()
+ *    - context  ：getAppContext()——ActivityThread 优先，jd.wjlogin_sdk.common.b.a() 兜底
  *    - key      ：静态字段 of.d.a（用反射读，规避「字段 a / 同名方法 a」歧义；含父类/私有）
  *    - content  ：指定 JSON 的 String.getBytes()（Java 平台默认字符集，安卓=UTF-8）
  *  返回 p7Envelope 的结果（byte[] -> {byteLen,hex,b64,txt}），便于离线复用。
  *  REPL：rpc.exports.p7envelope()                       // 用下方默认 content
  *        rpc.exports.p7envelope('{"appId":"..."}')      // 自定义 content 文本
  * ======================================================================= */
+/* 统一取 App Context：主动调用方法（p7Envelope / of.d.a / 你自己写的 RPC）都用它，别再内联 ActivityThread。
+ * 两条途径按序兜底：
+ *   1) ActivityThread.currentApplication().getApplicationContext()  —— 最通用
+ *   2) jd.wjlogin_sdk.common.b.a()  —— wjlogin SDK 全局 Context；App 早期 currentApplication() 还返回 null 时兜底
+ *      （该 SDK 静态方法 b.a() 直接返回全局 applicationContext）。
+ * 取不到返回 null，调用方自行兜底报错。 */
+function getAppContext() {
+  var ctx = safe(function () {
+    return Java.use("android.app.ActivityThread")
+      .currentApplication()
+      .getApplicationContext();
+  }, null);
+  if (ctx) return ctx;
+  return safe(function () {
+    return Java.use("jd.wjlogin_sdk.common.b").a();
+  }, null);
+}
+
 var CU_CLASS = "com.wangyin.platform.CryptoUtils";
 var KEY_CLASS = "of.d"; // 静态字段 of.d.a = p7Envelope 的 key（param1）
 var P7_CONTENT =
@@ -950,9 +972,13 @@ function callP7Envelope(contentStr) {
           ? P7_CONTENT
           : "" + contentStr;
 
-      var ctx = Java.use("android.app.ActivityThread")
-        .currentApplication()
-        .getApplicationContext();
+      var ctx = getAppContext();
+      if (!ctx) {
+        res =
+          "[p7] 取不到 Context（ActivityThread / jd.wjlogin_sdk.common.b.a() 都失败）";
+        console.log(res);
+        return;
+      }
       var C = safe(function () {
         return Java.use(CU_CLASS);
       }, null);
@@ -1052,9 +1078,13 @@ function callOfdA(contentStr) {
           ? P7_CONTENT
           : "" + contentStr;
 
-      var ctx = Java.use("android.app.ActivityThread")
-        .currentApplication()
-        .getApplicationContext();
+      var ctx = getAppContext();
+      if (!ctx) {
+        res =
+          "[ofda] 取不到 Context（ActivityThread / jd.wjlogin_sdk.common.b.a() 都失败）";
+        console.log(res);
+        return;
+      }
       var KC = safe(function () {
         return Java.use(KEY_CLASS);
       }, null);
@@ -1175,9 +1205,7 @@ function autoP7() {
         !!safe(function () {
           return Java.use(KEY_CLASS);
         }, null) &&
-        !!safe(function () {
-          return Java.use("android.app.ActivityThread").currentApplication();
-        }, null);
+        !!getAppContext();
     });
     if (ready) {
       console.log(
@@ -1479,6 +1507,29 @@ rpc.exports = {
     return "对象仓库已清空";
   },
 
+  /* 主动取一份 App Context（ActivityThread 优先，jd.wjlogin_sdk.common.b.a() 兜底）：
+     确认 RPC 主动调用能拿到 Context，返回 {cls,repr} 或失败说明 */
+  context: function () {
+    var r;
+    Java.perform(function () {
+      var ctx = getAppContext();
+      r = ctx
+        ? {
+            cls: safe(function () {
+              return "" + ctx.getClass().getName();
+            }, "?"),
+            repr: clip(
+              safe(function () {
+                return "" + ctx;
+              }, "<ctx>"),
+              200,
+            ),
+          }
+        : "取不到 Context（ActivityThread / jd.wjlogin_sdk.common.b.a() 都失败）";
+    });
+    console.log(JSON.stringify(r));
+    return r;
+  },
   /* 专用：调 CryptoUtils.newInstance(ctx).p7Envelope(静态字段 of.d.a, content.getBytes())
      content 省略=默认 JSON；返回 {byteLen,hex,b64,txt}（byte[]）或原始值，便于离线复用 */
   p7envelope: function (content) {
