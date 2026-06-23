@@ -22,12 +22,12 @@ parse_device_list() 直接拍平成 {feed_id, device_id, name, room, category, s
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import time
 import urllib.parse
-from copy import deepcopy
 
 try:
     from . import color_codec as cc           # 包内（HA 运行时）
@@ -69,12 +69,28 @@ def now_ms() -> int:
 
 
 def profile_from_ep(ep: dict) -> dict:
-    """解 ep.cipher（ciphertype:5）得设备档，补 uuid(=aid)/appid。设备档单一真源。"""
+    """解 ep.cipher（ciphertype:5）得明文设备档，补 uuid(=aid)/appid。"""
     cipher = ep.get("cipher", {})
     prof = {k: (cc.dec_str(v) if isinstance(v, str) else v) for k, v in cipher.items()}
     prof.setdefault("uuid", prof.get("aid"))
     prof.setdefault("appid", APPID)
     return prof
+
+
+def ep_from_profile(profile: dict, hdid: str, ts: int = 0, ridx: int = -1) -> dict:
+    """明文设备档 -> ciphertype:5 ep 信封（profile_from_ep 的逆）。
+
+    cipher 各字段 enc_str 换表编码；uuid/appid 是派生项不进 cipher。
+    因 color_codec 往返自洽，由明文重建出的 ep 与抓包线格式逐字节一致（ep 本就不进 sign）。
+    """
+    cipher = {k: cc.enc_str(str(v)) for k, v in profile.items() if k not in ("uuid", "appid")}
+    return {"hdid": hdid, "ts": ts, "ridx": ridx, "cipher": cipher,
+            "ciphertype": CIPHERTYPE, "version": ENVELOPE_VERSION, "appname": APPNAME}
+
+
+def hdid_from_eid(eid: str) -> str:
+    """body 信封 hdid = base64(sha256(eid))（标准表、无换行）。见 memory jd-hdid-eid-derivation。"""
+    return base64.b64encode(hashlib.sha256(eid.encode("utf-8")).digest()).decode("ascii")
 
 
 def build_preimage(fields: dict) -> str:
@@ -136,17 +152,40 @@ class JdColorClient:
         self,
         session=None,
         *,
-        ep: dict,
+        profile: dict | None = None,
+        ep_hdid: str = "",
+        ep: dict | None = None,
         sign_secret: str,
-        body_hdid: str,
+        body_hdid: str | None = None,
         pin: str,
         jmafinger: str,
         tgt: str,
+        ep_ts: int = 0,
+        ep_ridx: int = -1,
     ) -> None:
+        """设备档两种给法（二选一）:
+            profile  明文设备档 dict（推荐，可读易改）+ ep_hdid（ep 信封 hdid token）
+            ep       抓包的密文 ciphertype:5 信封 dict（旧格式，自动解出 profile）
+        body_hdid 不给则按 base64(sha256(eid)) 自动派生。
+        """
         self._session = session
-        self.ep = ep
+        if profile is not None:
+            prof = dict(profile)
+        elif ep is not None:
+            prof = profile_from_ep(ep)
+            ep_hdid = ep.get("hdid", ep_hdid)
+            ep_ts = ep.get("ts", ep_ts)
+            ep_ridx = ep.get("ridx", ep_ridx)
+        else:
+            raise ValueError("JdColorClient 需要 profile(明文设备档) 或 ep(密文信封)")
+        prof.setdefault("uuid", prof.get("aid"))
+        prof.setdefault("appid", APPID)
+        self.profile = prof
+        self.ep_hdid = ep_hdid
+        self.ep_ts = ep_ts
+        self.ep_ridx = ep_ridx
         self.sign_secret = sign_secret
-        self.body_hdid = body_hdid
+        self.body_hdid = body_hdid or hdid_from_eid(prof["eid"])
         self.pin = pin
         self.jmafinger = jmafinger
         self.tgt = tgt
@@ -164,10 +203,10 @@ class JdColorClient:
         body_str = _as_body_str(body)
         t = int(t) if t is not None else now_ms()
 
-        ep = deepcopy(self.ep)
-        if refresh_ep_ts:
-            ep["ts"] = t                      # ep 不进 sign，刷新 ts 只为过新鲜度校验
-        profile = profile_from_ep(ep)
+        profile = self.profile
+        # ep 不进 sign：刷新 ts 只为过新鲜度校验；由明文设备档现造，与抓包线格式一致
+        ts = t if refresh_ep_ts else self.ep_ts
+        ep = ep_from_profile(profile, self.ep_hdid, ts=ts, ridx=self.ep_ridx)
 
         fields = dict({k: profile[k] for k in DEVICE_KEYS if k in profile},
                       functionId=function_id, body=body_str, t=str(t))
@@ -237,7 +276,7 @@ class JdColorClient:
     # ---- 高层便捷：直接拿拍平后的设备列表 ----
     async def fetch_devices(self, house_id, **kw) -> list[dict]:
         resp = await self.get_all_devices(house_id, **kw)
-        return parse_device_list(resp, requester_device_id=profile_from_ep(self.ep).get("uuid"))
+        return parse_device_list(resp, requester_device_id=self.profile.get("uuid"))
 
 
 # ====================== 离线自检（不联网、不需 aiohttp、不需真实凭据）======================
@@ -260,11 +299,9 @@ def selftest() -> bool:
 
     # 3) 用合成设备档装配请求（非真实值），验签名拼接 + ep/body 往返
     syn_prof = {k: k.upper() for k in DEVICE_KEYS}
-    syn_ep = {
-        "hdid": "EPHDID", "ts": 1, "ridx": -1,
-        "cipher": {k: cc.enc_str(v) for k, v in syn_prof.items() if k != "appid"},
-        "ciphertype": CIPHERTYPE, "version": ENVELOPE_VERSION, "appname": APPNAME,
-    }
+    syn_prof["uuid"] = syn_prof["aid"]      # 真实里 uuid == aid（设备 uuid）
+    syn_prof["appid"] = APPID
+    syn_ep = ep_from_profile(syn_prof, "EPHDID", ts=1)   # 等价密文信封（cipher 排除 uuid/appid）
     client = JdColorClient(None, ep=syn_ep, sign_secret="k" * 32, body_hdid="BODYHDID",
                            pin="pin", jmafinger="jma", tgt="TGT")
     req = client.build_request("jdsmart.house.getAllDevices", {"houseId": "1388207"},
@@ -280,6 +317,24 @@ def selftest() -> bool:
           cc.dec_str(env["cipher"]["body"]) == '{"houseId":"1388207"}')
     check("cookie 含 pin/wskey/whwswswws/unionwsws",
           all(s in req["headers"]["Cookie"] for s in ("pin=", "wskey=TGT", "whwswswws=jma", "unionwsws=")))
+    # query 里的 ep 能 decode 回设备档（明文档现造 -> 解出 == 原档）
+    q_ep = json.loads(q["ep"][0])
+    check("query.ep 解回设备档", profile_from_ep(q_ep).get("eid") == syn_prof["eid"])
+
+    # 3b) 明文 profile 路径 == 密文 ep 路径（同一设备档：sign/url/data 逐字节一致）
+    client_prof = JdColorClient(None, profile=syn_prof, ep_hdid="EPHDID", ep_ts=1,
+                                sign_secret="k" * 32, body_hdid="BODYHDID",
+                                pin="pin", jmafinger="jma", tgt="TGT")
+    r_prof = client_prof.build_request("jdsmart.house.getAllDevices", {"houseId": "1388207"},
+                                       t=123, refresh_ep_ts=False)
+    r_ep = client.build_request("jdsmart.house.getAllDevices", {"houseId": "1388207"},
+                                t=123, refresh_ep_ts=False)
+    check("明文 profile 路径 == 密文 ep 路径（sign/url/data 一致）",
+          r_prof["sign"] == r_ep["sign"] and r_prof["url"] == r_ep["url"]
+          and r_prof["data"] == r_ep["data"])
+    check("body_hdid 缺省自动派生 = base64(sha256(eid))",
+          JdColorClient(None, profile=syn_prof, ep_hdid="X", sign_secret="k" * 32,
+                        pin="p", jmafinger="j", tgt="t").body_hdid == hdid_from_eid(syn_prof["eid"]))
 
     # 4) 设备列表解析：合成一条 getAllDevices 响应（非真实值，结构同抓包）
     fake_resp = {

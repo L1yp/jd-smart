@@ -15,7 +15,26 @@
 
     交互模式里也支持：直接敲 `devices 1388207`，或先敲 functionId 再按提示输 body。
 
+jd_smart_secrets.json 需要的字段（彩虹网关）:
+    必填:
+      color_sign_secret   native getSecretKey() 的 32 字符（HMAC 密钥）
+      color_pin           Cookie 的 pin（如 jd_xxx）
+      color_jmafinger     Cookie 的 whwswswws / jmafinger（一个 UUID）
+      tgt                 登录票据（会过期，需刷新）
+    设备档（二选一）:
+      ① color_profile（推荐，明文易改）+ color_ep_hdid
+         color_profile = {aid,uuid,appid,area,build,client,clientVersion,d_brand,
+                          d_model,eid,ext,networkType,osVersion,partner,screen}
+         color_ep_hdid = ep 信封的 hdid（一串 base64 token，原样填）
+      ② color_ep（旧格式，抓包的 ciphertype:5 密文信封，自动解出 profile）
+    可选:
+      color_body_hdid     不填则自动按 base64(sha256(eid)) 派生
+
+    没有明文 color_profile？跑一次把现有密文 color_ep 转成可粘贴的明文块:
+        python color_test.py --dump-profile
+
 选项:
+    --dump-profile       打印可粘贴进 secrets 的明文 color_profile/ep_hdid/body_hdid，然后退出
     --dry-run            只打印签好名的请求（URL/Cookie/body 信封），不发送
     --t <ms>             固定毫秒时间戳（默认取当前）
     --no-refresh-ep-ts   ep.ts 保持抓包原值（默认刷新为当前 t；ep 不进 sign，二者皆可）
@@ -35,9 +54,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 _PKG = os.path.join(HERE, "custom_components", "jd_smart")
 _SECRETS = os.path.join(HERE, "jd_smart_secrets.json")
 
-# 凭据 -> JdColorClient 入参
-_CRED_KEYS = ("color_ep", "color_sign_secret", "color_body_hdid",
-              "color_pin", "color_jmafinger", "tgt")
+# 必填凭据（设备档另算：color_profile 明文 或 color_ep 密文，二选一）
+_REQUIRED_KEYS = ("color_sign_secret", "color_pin", "color_jmafinger", "tgt")
 
 # 快捷词 -> (真 functionId, 由参数构造 body)
 SHORTCUTS = {
@@ -57,23 +75,54 @@ def _load_color_api():
     return mod
 
 
+def _filled(v):
+    return v not in (None, "") and not str(v).startswith("<")
+
+
 def _load_client(color_api, secrets_path):
     if not os.path.exists(secrets_path):
         sys.exit(f"[!] 缺 {os.path.basename(secrets_path)}：拷 jd_smart_secrets.example.json 填真实值。")
     with open(secrets_path, encoding="utf-8") as f:
         cfg = json.load(f)
-    miss = [k for k in _CRED_KEYS if not cfg.get(k) or str(cfg.get(k)).startswith("<")]
+    name = os.path.basename(secrets_path)
+
+    miss = [k for k in _REQUIRED_KEYS if not _filled(cfg.get(k))]
     if miss:
-        sys.exit(f"[!] {os.path.basename(secrets_path)} 缺彩虹凭据字段: {', '.join(miss)}（见 *.example.json）")
-    return color_api.JdColorClient(
-        None,
-        ep=cfg["color_ep"],
+        sys.exit(f"[!] {name} 缺必填字段: {', '.join(miss)}（见 *.example.json）")
+
+    common = dict(
         sign_secret=cfg["color_sign_secret"],
-        body_hdid=cfg["color_body_hdid"],
         pin=cfg["color_pin"],
         jmafinger=cfg["color_jmafinger"],
         tgt=cfg["tgt"],
+        body_hdid=cfg["color_body_hdid"] if _filled(cfg.get("color_body_hdid")) else None,
     )
+
+    prof = cfg.get("color_profile")
+    if isinstance(prof, dict) and prof and all(_filled(v) for v in prof.values()):
+        # ① 明文设备档（推荐）：ep_hdid 取 color_ep_hdid，或仍兼容从 color_ep.hdid 拿
+        ep_hdid = cfg.get("color_ep_hdid") or (cfg.get("color_ep") or {}).get("hdid", "")
+        if not _filled(ep_hdid):
+            sys.exit(f"[!] {name} 有 color_profile 但缺 color_ep_hdid（ep 信封 hdid token）。")
+        return color_api.JdColorClient(None, profile=prof, ep_hdid=ep_hdid, **common)
+
+    ep = cfg.get("color_ep")
+    if isinstance(ep, dict) and ep.get("cipher"):
+        # ② 旧格式密文信封（自动解出 profile）
+        return color_api.JdColorClient(None, ep=ep, **common)
+
+    sys.exit(f"[!] {name} 缺设备档：填明文 color_profile(+color_ep_hdid) 或密文 color_ep（见 *.example.json）。")
+
+
+def dump_profile(color_api, client):
+    """把当前生效的设备档导成可粘贴进 secrets 的明文块（密文 color_ep -> 明文 color_profile）。"""
+    snippet = {
+        "color_profile": {k: client.profile[k] for k in color_api.DEVICE_KEYS if k in client.profile},
+        "color_ep_hdid": client.ep_hdid,
+        "color_body_hdid": client.body_hdid,
+    }
+    print("# 把下面三项粘进 jd_smart_secrets.json（可删掉旧的密文 color_ep）：")
+    print(json.dumps(snippet, ensure_ascii=False, indent=2))
 
 
 def _resolve(function_id, body_arg):
@@ -106,8 +155,7 @@ def _send(req, timeout):
 def _print_devices(color_api, client, resp):
     """getAllDevices 响应：额外打印拍平后的设备表。"""
     try:
-        prof = color_api.profile_from_ep(client.ep)
-        devs = color_api.parse_device_list(resp, requester_device_id=prof.get("uuid"))
+        devs = color_api.parse_device_list(resp, requester_device_id=client.profile.get("uuid"))
     except Exception as e:
         print(f"  (设备解析失败: {e})")
         return
@@ -196,6 +244,8 @@ def main():
     )
     ap.add_argument("function_id", nargs="?", help="functionId 或快捷词（省略=交互模式）")
     ap.add_argument("body", nargs="?", help="body JSON；或快捷词 details/devices 的 houseId")
+    ap.add_argument("--dump-profile", action="store_true",
+                    help="打印可粘贴的明文 color_profile/ep_hdid/body_hdid，然后退出")
     ap.add_argument("--dry-run", action="store_true", help="只打印签好名的请求，不发送")
     ap.add_argument("--t", help="固定毫秒时间戳（默认当前）")
     ap.add_argument("--no-refresh-ep-ts", action="store_true", help="ep.ts 保持抓包原值")
@@ -207,7 +257,9 @@ def main():
     color_api = _load_color_api()
     client = _load_client(color_api, args.secrets)
 
-    if args.function_id is None:
+    if args.dump_profile:
+        dump_profile(color_api, client)
+    elif args.function_id is None:
         repl(color_api, client, args)
     else:
         do_request(color_api, client, args.function_id, args.body, args)
