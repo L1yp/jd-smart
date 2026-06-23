@@ -246,6 +246,9 @@ def main():
     ap.add_argument("--sig-file", default="hook_signatures.js",
                     help="frida_generic_hook.js 的外置签名列表文件；加载时自动注入到核心脚本的 "
                          "//__EXTERNAL_SIGNATURES__ 标记处（改签名只动这个文件，不用动核心脚本）")
+    ap.add_argument("--call-file", default="active_calls.js",
+                    help="frida_generic_hook.js 的外置「主动调用」模块文件；加载时自动注入到核心脚本的 "
+                         "//__ACTIVE_CALLS__ 标记处（加/改主动调用只动这个文件，不用动核心脚本）")
     ap.add_argument("--spawn", action="store_true",
                     help="spawn 启动而非 attach，能抓到启动期的登录/换票请求")
     ap.add_argument("-H", "--host", default=None,
@@ -528,6 +531,18 @@ def main():
         else:
             print(f"[*] 未找到 {args.sig_file}（可 copy hook_signatures.example.js 为 hook_signatures.js 再改），"
                   f"暂用核心脚本内置 DEFAULT_SIGNATURES 兜底")
+
+    # frida_generic_hook.js 的「主动调用」外置：把 --call-file 内容注入到核心脚本的标记处，
+    # 这样加/改主动调用（p7Envelope/of.d.a 等）只动 active_calls.js，不用动核心脚本。
+    CALL_MARK = "//__ACTIVE_CALLS__"
+    if CALL_MARK in src:
+        if os.path.exists(args.call_file):
+            with open(args.call_file, "r", encoding="utf-8") as cf:
+                src = src.replace(CALL_MARK, cf.read())
+            print(f"[*] 已注入主动调用文件 {args.call_file}")
+        else:
+            print(f"[*] 未找到 {args.call_file}，主动调用 RPC（p7envelope/ofda/p7suite）不可用，"
+                  f"通用 hook 不受影响")
 
     if args.spawn:
         pid = device.spawn([args.package])

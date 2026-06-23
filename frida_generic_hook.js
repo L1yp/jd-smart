@@ -54,17 +54,12 @@
  *       1) ActivityThread.currentApplication().getApplicationContext()   2) jd.wjlogin_sdk.common.b.a()
  *       REPL 手动取一份： rpc.exports.context()
  *
- *   ── 专用：调网银 SDK 的 p7Envelope / of.d.a（默认自动跑，host.py 下也能拿结果）───
- *     默认 AUTO_P7=true：启动 AUTO_P7_DELAY_MS 后自动跑套件（等类/Application 就绪，晚加载自动重试）：
- *       p7Envelope 与 of.d.a 各【连调 2 次】，看各自输出是否稳定（一致=可重放；不一致=有时间戳/随机）。
- *       结果 send(type=hook) 落 hook_log：原始输出 tag=p7（p7Envelope）/ tag=ofda（of.d.a），结论 tag=p7cmp。
- *       不想自动跑就把 AUTO_P7 设 false。查结果：
- *         SELECT method,ret_txt,ret_hex FROM hook_log WHERE tag IN('p7','ofda','p7cmp') ORDER BY id DESC;
- *     手动/重调（standalone REPL）：
- *       rpc.exports.p7suite()             两者各连调 2 次（同自动跑）
- *       rpc.exports.p7envelope([content]) CryptoUtils.newInstance(ctx).p7Envelope(静态字段 of.d.a, content.getBytes())
- *       rpc.exports.ofda([content])       of.d.a(ctx, content.getBytes())  —— of.d 的方法 a(Context,byte[])
- *                                          content 省略=默认 com.jd.iots/CCO-RISK JSON；返回 {byteLen,hex,b64,txt}
+ *   ── 主动调用具体业务方法（主动调 App 里的方法，而非被动 hook）：见外置 active_calls.js ──
+ *     p7Envelope / of.d.a 这套京东网银加密调用已抽到 active_calls.js（host.py 自动注入，
+ *     默认读 active_calls.js，可 --call-file 换文件），它 registerActiveCall 出这些 RPC：
+ *       rpc.exports.p7envelope([content]) / rpc.exports.ofda([content]) / rpc.exports.p7suite()
+ *     想加新的主动调用（调别的方法）就改 active_calls.js（registerActiveCall/registerActiveBoot），
+ *     不用动本核心脚本；落库 tag 见 active_calls.js（p7/ofda/p7cmp）
  *
  *   触发后查库：
  *     SELECT captured_at,clazz,method,sig,arg0,arg1,arg2,ret_txt,ret_b64 FROM hook_log ORDER BY id DESC LIMIT 50;
@@ -925,20 +920,13 @@ function rpcVal(x) {
 }
 
 /* =======================================================================
- *  专用调用：com.wangyin.platform.CryptoUtils.newInstance(ctx).p7Envelope(key, content)
- *    - context  ：getAppContext()——ActivityThread 优先，jd.wjlogin_sdk.common.b.a() 兜底
- *    - key      ：静态字段 of.d.a（用反射读，规避「字段 a / 同名方法 a」歧义；含父类/私有）
- *    - content  ：指定 JSON 的 String.getBytes()（Java 平台默认字符集，安卓=UTF-8）
- *  返回 p7Envelope 的结果（byte[] -> {byteLen,hex,b64,txt}），便于离线复用。
- *  REPL：rpc.exports.p7envelope()                       // 用下方默认 content
- *        rpc.exports.p7envelope('{"appId":"..."}')      // 自定义 content 文本
+ *  主动调用「地基」：getAppContext()——所有主动调用（active_calls.js 里的
+ *  p7Envelope / of.d.a，及你自己写的 RPC）都用它取 Context，别再内联 ActivityThread。
+ *  具体业务调用已抽到外置 active_calls.js（注入到下方注册表后的标记处）。
  * ======================================================================= */
-/* 统一取 App Context：主动调用方法（p7Envelope / of.d.a / 你自己写的 RPC）都用它，别再内联 ActivityThread。
- * 两条途径按序兜底：
+/* 两条途径按序兜底，取不到返回 null（调用方自行兜底报错）：
  *   1) ActivityThread.currentApplication().getApplicationContext()  —— 最通用
- *   2) jd.wjlogin_sdk.common.b.a()  —— wjlogin SDK 全局 Context；App 早期 currentApplication() 还返回 null 时兜底
- *      （该 SDK 静态方法 b.a() 直接返回全局 applicationContext）。
- * 取不到返回 null，调用方自行兜底报错。 */
+ *   2) jd.wjlogin_sdk.common.b.a()  —— wjlogin SDK 全局 Context；App 早期 currentApplication() 还返回 null 时兜底 */
 function getAppContext() {
   var ctx = safe(function () {
     return Java.use("android.app.ActivityThread")
@@ -951,280 +939,26 @@ function getAppContext() {
   }, null);
 }
 
-var CU_CLASS = "com.wangyin.platform.CryptoUtils";
-var KEY_CLASS = "of.d"; // 静态字段 of.d.a = p7Envelope 的 key（param1）
-var P7_CONTENT =
-  '{"appId":"com.jd.iots","bizId":"CCO-RISK","deviceInfo":{"sdk_version":"8.1.0"}}';
-
-/* 自动触发（让走 host.py 无 REPL 也能拿到结果，不必手动调 rpc.exports.p7envelope）：
- *   AUTO_P7=false 则只保留手动 RPC 入口。--spawn 冷启动建议 DELAY ≥ 5000 给 SDK 初始化时间。 */
-var AUTO_P7 = true;
-var AUTO_P7_DELAY_MS = 6000; // 首次尝试前延迟
-var AUTO_P7_RETRY_MS = 1500, // 类/Application 未就绪时的重试间隔
-  AUTO_P7_RETRY_MAX = 40; // 重试次数上限
-
-function callP7Envelope(contentStr) {
-  var res;
-  Java.perform(function () {
-    try {
-      contentStr =
-        contentStr === undefined || contentStr === null
-          ? P7_CONTENT
-          : "" + contentStr;
-
-      var ctx = getAppContext();
-      if (!ctx) {
-        res =
-          "[p7] 取不到 Context（ActivityThread / jd.wjlogin_sdk.common.b.a() 都失败）";
-        console.log(res);
-        return;
-      }
-      var C = safe(function () {
-        return Java.use(CU_CLASS);
-      }, null);
-      if (!C) {
-        res = "[p7] 类未加载: " + CU_CLASS + "（触发让其加载后再调）";
-        console.log(res);
-        return;
-      }
-
-      /* key = of.d 的静态字段 a（反射读，避开「字段 a / 方法 a」同名歧义；setAccessible 处理私有） */
-      var KC = safe(function () {
-        return Java.use(KEY_CLASS);
-      }, null);
-      if (!KC) {
-        res = "[p7] key 类未加载: " + KEY_CLASS + "（触发让其加载后再调）";
-        console.log(res);
-        return;
-      }
-      var keyField = findField(KC.class, "a");
-      if (!keyField) {
-        res = "[p7] 找不到静态字段 " + KEY_CLASS + ".a";
-        console.log(res);
-        return;
-      }
-      var key = getFieldVal(keyField, null);
-
-      /* content = "...".getBytes()（用真 Java String 的默认字符集字节，忠实复刻 .getBytes()） */
-      var content = Java.use("java.lang.String").$new(contentStr).getBytes();
-
-      /* newInstance(ctx).p7Envelope(key, content)（重载由 Frida 按实参类型自动解析） */
-      var inst = C.newInstance(ctx);
-      var out = inst.p7Envelope(key, content);
-
-      var kf = fmtVal(key),
-        of = fmtVal(out);
-      console.log(
-        "\n[p7] " + CU_CLASS + ".newInstance(ctx).p7Envelope(a, content)",
-      );
-      console.log("   ctx     = " + ctx);
-      console.log(
-        "   key(of.d.a) = " +
-          (kf.txt === null ? "null" : kf.txt) +
-          (kf.hex ? "  hex=" + kf.hex : "") +
-          "  (" +
-          kf.type +
-          ")",
-      );
-      console.log("   content = " + contentStr);
-      console.log(
-        "   ret     = " +
-          (of.txt === null ? "null" : of.txt) +
-          (of.hex ? "  hex=" + of.hex : "") +
-          (of.b64 ? "  b64=" + of.b64 : "") +
-          "  (" +
-          of.type +
-          ")",
-      );
-
-      /* 落库：send(type=hook) -> host.py 写 hook_log 表 + 打印一行（tag=p7 便于过滤）。
-         这样走 host.py（无 REPL）也能拿到结果，不必手动调。 */
-      var a0 = argStr(key),
-        a1 = contentStr;
-      emit({
-        clazz: CU_CLASS,
-        method: "p7Envelope",
-        sig: "(via newInstance(ctx))",
-        is_static: 0,
-        is_native: 0,
-        tag: "p7",
-        arg0: a0,
-        arg1: a1,
-        args: "a0(key)=" + (a0 === null ? "null" : a0) + " | a1(content)=" + a1,
-        ret_type: of.type,
-        ret_txt: of.txt,
-        ret_hex: of.hex,
-        ret_b64: of.b64,
-        thread: THREAD_NAME ? curThread() : null,
-        stack: null,
-      });
-      res = rpcVal(out);
-    } catch (e) {
-      res = "[p7] 调用失败: " + e + "\n" + (e.stack || "");
-      console.log(res);
-    }
-  });
-  return res;
+/* =======================================================================
+ *  主动调用模块注册表（外置 active_calls.js 注入到下方标记处）
+ *    · active_calls.js 里用 registerActiveCall(名, fn) 注册 RPC（合并进 rpc.exports）；
+ *      用 registerActiveBoot(fn) 注册自启动钩子（入口 Java.perform 里依次执行）。
+ *    · 注入点在「工具函数 + getAppContext」之后、rpc.exports 之前，故 active_calls.js
+ *      能直接用 getAppContext / safe / fmtVal / argStr / emit / findField /
+ *      getFieldVal / curThread / THREAD_NAME / rpcVal 等核心工具，无需重复实现。
+ *    · 没有 active_calls.js（standalone 纯看 console，或文件缺失）时，下方标记只是
+ *      一行注释，主动调用 RPC 缺失，但不影响通用 hook 与 rpc.exports.context()。
+ * ======================================================================= */
+var ACTIVE_RPC = {}; // 名称 -> 函数；rpc.exports 定义后合并进去
+var ACTIVE_BOOTS = []; // 自启动函数；入口 Java.perform 里依次执行
+function registerActiveCall(name, fn) {
+  ACTIVE_RPC[name] = fn;
+}
+function registerActiveBoot(fn) {
+  ACTIVE_BOOTS.push(fn);
 }
 
-/* 新增主动调用：of.d.a(ctx, content)——of.d 的方法 a(Context,byte[])（与 p7Envelope 对照/独立验证）。
- * 默认按「静态方法」调（of.d.a(...) 的写法即静态）；落库 tag=ofda。 */
-function callOfdA(contentStr) {
-  var res;
-  Java.perform(function () {
-    try {
-      contentStr =
-        contentStr === undefined || contentStr === null
-          ? P7_CONTENT
-          : "" + contentStr;
-
-      var ctx = getAppContext();
-      if (!ctx) {
-        res =
-          "[ofda] 取不到 Context（ActivityThread / jd.wjlogin_sdk.common.b.a() 都失败）";
-        console.log(res);
-        return;
-      }
-      var KC = safe(function () {
-        return Java.use(KEY_CLASS);
-      }, null);
-      if (!KC) {
-        res = "[ofda] 类未加载: " + KEY_CLASS + "（触发让其加载后再调）";
-        console.log(res);
-        return;
-      }
-
-      var content = Java.use("java.lang.String").$new(contentStr).getBytes();
-      var out = KC.a(ctx, content); // of.d.a(Context, byte[])（重载按实参类型自动解析）
-
-      var rv = fmtVal(out);
-      console.log("\n[ofda] " + KEY_CLASS + ".a(ctx, content)");
-      console.log("   content = " + contentStr);
-      console.log(
-        "   ret     = " +
-          (rv.txt === null ? "null" : rv.txt) +
-          (rv.hex ? "  hex=" + rv.hex : "") +
-          (rv.b64 ? "  b64=" + rv.b64 : "") +
-          "  (" +
-          rv.type +
-          ")",
-      );
-      emit({
-        clazz: KEY_CLASS,
-        method: "a",
-        sig: "(Context,byte[])",
-        is_static: 0,
-        is_native: 0,
-        tag: "ofda",
-        arg0: "ctx",
-        arg1: contentStr,
-        args: "a0=ctx | a1(content)=" + contentStr,
-        ret_type: rv.type,
-        ret_txt: rv.txt,
-        ret_hex: rv.hex,
-        ret_b64: rv.b64,
-        thread: THREAD_NAME ? curThread() : null,
-        stack: null,
-      });
-      res = rpcVal(out);
-    } catch (e) {
-      res = "[ofda] 调用失败: " + e + "\n" + (e.stack || "");
-      console.log(res);
-    }
-  });
-  return res;
-}
-
-/* 把 rpcVal 结果归一成「可比较字符串」：byte[]->hex；基本类型->原值；对象->repr */
-function cmpKey(r) {
-  if (r === null || r === undefined) return "null";
-  var t = typeof r;
-  if (t === "string" || t === "number" || t === "boolean") return "" + r;
-  if (r.hex) return r.hex;
-  if (r.b64) return r.b64;
-  if (r.txt) return r.txt;
-  if (r.repr !== undefined) return "" + r.repr;
-  return JSON.stringify(r);
-}
-
-/* 一个调用连发 2 次的结论：打印 + 落库（tag=p7cmp）是否一致 */
-function reportPair(name, clazz, k1, k2) {
-  var same = k1 === k2;
-  console.log(
-    "\n[p7][" +
-      name +
-      "] 连调 2 次 -> " +
-      (same
-        ? "结果一致 ✓（确定性，可整块重放）"
-        : "结果不一致 ✗（每次变化：含时间戳/随机/nonce）"),
-  );
-  console.log("   #1 = " + k1);
-  console.log("   #2 = " + k2);
-  emit({
-    clazz: clazz,
-    method: name + " x2",
-    sig: same ? "(stable)" : "(changes)",
-    is_static: 0,
-    is_native: 0,
-    tag: "p7cmp",
-    arg0: k1,
-    arg1: k2,
-    args: "#1=" + k1 + " | #2=" + k2,
-    ret_type: "compare",
-    ret_txt: same ? "SAME" : "DIFF",
-    ret_hex: null,
-    ret_b64: null,
-    thread: THREAD_NAME ? curThread() : null,
-    stack: null,
-  });
-  return same;
-}
-
-/* 套件：p7Envelope 与 of.d.a 各连调 2 次，看各自输出是否稳定（每次原始结果也各自落库） */
-function p7Suite() {
-  console.log("\n[p7] ===== p7Envelope / of.d.a 各连调 2 次，看输出是否稳定 =====");
-  var a1 = cmpKey(callP7Envelope());
-  var a2 = cmpKey(callP7Envelope());
-  reportPair("p7Envelope", CU_CLASS, a1, a2);
-  var b1 = cmpKey(callOfdA());
-  var b2 = cmpKey(callOfdA());
-  reportPair("of.d.a", KEY_CLASS, b1, b2);
-  console.log("[p7] ============================================================\n");
-}
-
-/* 启动后自动调一次：等 CryptoUtils 类 + Application 都就绪再触发（晚加载自动重试） */
-function autoP7() {
-  var tries = 0;
-  (function attempt() {
-    var ready = false;
-    Java.perform(function () {
-      ready =
-        !!safe(function () {
-          return Java.use(CU_CLASS);
-        }, null) &&
-        !!safe(function () {
-          return Java.use(KEY_CLASS);
-        }, null) &&
-        !!getAppContext();
-    });
-    if (ready) {
-      console.log(
-        "[p7] 自动触发：p7Envelope 与 of.d.a 各连调 2 次比对（关：AUTO_P7=false；重调：rpc.exports.p7suite()）",
-      );
-      safe(function () {
-        p7Suite();
-      });
-      return;
-    }
-    if (++tries <= AUTO_P7_RETRY_MAX) setTimeout(attempt, AUTO_P7_RETRY_MS);
-    else
-      console.log(
-        "[p7] 放弃自动触发：" +
-          CU_CLASS +
-          " / Application 一直未就绪（在 App 里操作让 SDK 加载，或 rpc.exports.p7envelope() 手动调）",
-      );
-  })();
-}
+//__ACTIVE_CALLS__
 
 /* =======================================================================
  *  RPC：辅助查方法签名 / 看命中计数 / 用 hook 现场暂存的活对象调方法读写字段
@@ -1530,21 +1264,13 @@ rpc.exports = {
     console.log(JSON.stringify(r));
     return r;
   },
-  /* 专用：调 CryptoUtils.newInstance(ctx).p7Envelope(静态字段 of.d.a, content.getBytes())
-     content 省略=默认 JSON；返回 {byteLen,hex,b64,txt}（byte[]）或原始值，便于离线复用 */
-  p7envelope: function (content) {
-    return callP7Envelope(content);
-  },
-  /* 专用：调 of.d.a(ctx, content.getBytes())（of.d 的方法 a(Context,byte[])） */
-  ofda: function (content) {
-    return callOfdA(content);
-  },
-  /* 套件：p7Envelope 与 of.d.a 各连调 2 次，看输出是否稳定（结果见 console / hook_log） */
-  p7suite: function () {
-    p7Suite();
-    return "done（看 console；查库：SELECT method,ret_txt,ret_hex FROM hook_log WHERE tag IN('p7','ofda','p7cmp') ORDER BY id DESC）";
-  },
 };
+
+/* 把 active_calls.js 注册的主动调用 RPC 合并进 rpc.exports
+   （注入点在 rpc.exports 之前，此时 registerActiveCall 已执行完） */
+Object.keys(ACTIVE_RPC).forEach(function (k) {
+  rpc.exports[k] = ACTIVE_RPC[k];
+});
 
 /* =======================================================================
  *  入口
@@ -1576,14 +1302,10 @@ Java.perform(function () {
     }, ARM_DELAY_MS);
   } else armAll();
 
-  if (AUTO_P7) {
-    console.log(
-      "[p7] " +
-        AUTO_P7_DELAY_MS +
-        "ms 后自动调：p7Envelope 与 of.d.a 各连调 2 次比对，结果落 hook_log(tag=p7/ofda/p7cmp)",
-    );
-    setTimeout(autoP7, AUTO_P7_DELAY_MS);
-  }
+  /* 执行 active_calls.js 注册的自启动钩子（如 AUTO_P7 自动跑 p7 套件）。没注入则为空，无副作用 */
+  ACTIVE_BOOTS.forEach(function (boot) {
+    safe(boot);
+  });
 
   console.log(
     "\n[*] 通用 hook 已启动（落 host.py 的 hook_log 表，type=hook）。",
