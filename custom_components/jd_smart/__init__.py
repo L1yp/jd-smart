@@ -47,7 +47,7 @@ def _load_devices(entry: ConfigEntry) -> list[dict]:
     """
     raw = entry.options.get(CONF_DEVICES)
     devices = [dict(d) for d in raw] if isinstance(raw, list) else parse_devices(raw)
-    android_id = entry.data.get(CONF_ANDROID_ID)
+    android_id = _merged(entry).get(CONF_ANDROID_ID)
     override = (entry.options.get(CONF_DEVICE_ID_OVERRIDE) or "").strip()
     default_did = hashlib.md5(android_id.encode("utf-8")).hexdigest() if android_id else None
     for d in devices:
@@ -77,19 +77,27 @@ def parse_devices(text: str | None) -> list[dict]:
     return devices
 
 
+def _merged(entry: ConfigEntry) -> dict:
+    """entry.data 叠加 entry.options（非空覆盖）。选项里补填/改的 凭据/设备档 才会在运行时生效。"""
+    cfg = dict(entry.data)
+    for k, v in (entry.options or {}).items():
+        if v not in (None, ""):
+            cfg[k] = v
+    return cfg
+
+
 def _client_from_entry(hass: HomeAssistant, entry: ConfigEntry) -> JdSmartClient:
-    data = entry.data
-    tgt = entry.options.get(CONF_TGT) or data[CONF_TGT]  # 选项里的 tgt 优先（可热更新）
+    cfg = _merged(entry)  # 选项里改的 tgt/seg1/key/机型 等优先（可热更新）
     return JdSmartClient(
         async_get_clientsession(hass),
-        seg1=data[CONF_SEG1],
-        key=data[CONF_KEY],
-        tgt=tgt,
-        hard_platform=data[CONF_HARD_PLATFORM],
-        app_version=data[CONF_APP_VERSION],
-        plat_version=data[CONF_PLAT_VERSION],
-        channel=data[CONF_CHANNEL],
-        plat=data[CONF_PLAT],
+        seg1=cfg[CONF_SEG1],
+        key=cfg[CONF_KEY],
+        tgt=cfg[CONF_TGT],
+        hard_platform=cfg[CONF_HARD_PLATFORM],
+        app_version=cfg[CONF_APP_VERSION],
+        plat_version=cfg[CONF_PLAT_VERSION],
+        channel=cfg[CONF_CHANNEL],
+        plat=cfg[CONF_PLAT],
     )
 
 

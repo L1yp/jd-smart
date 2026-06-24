@@ -58,16 +58,35 @@
       "init": {
         "title": "JD Smart options",
         "menu_options": {
-          "creds": "Update tgt / interval",
+          "settings": "Credentials & device info",
           "rediscover": "Re-discover devices",
           "streams": "Edit sensors / units",
           "manual": "Manual device entry"
         }
       },
-      "creds": {
-        "title": "Credentials & polling",
+      "settings": {
+        "title": "Credentials & device info",
+        "description": "Rainbow color_* discovers devices; seg1/key poll snapshots; android_id derives aid/device_id; leave eid empty to auto-fetch. Upgrading from the old version: fill the color_* / android_id fields here, then run Re-discover.",
         "data": {
-          "tgt": "tgt (update on expiry)",
+          "color_sign_secret": "color_sign_secret (rainbow HMAC key)",
+          "color_pin": "color_pin (cookie pin)",
+          "color_jmafinger": "color_jmafinger (cookie UUID)",
+          "tgt": "tgt (login ticket)",
+          "seg1": "seg1 (constant id)",
+          "key": "HmacSHA1 key",
+          "android_id": "android_id (16hex)",
+          "d_brand": "Brand",
+          "d_model": "Model",
+          "os_version": "OS version (SDK_INT)",
+          "screen": "Screen (e.g. 1080*2160)",
+          "area": "LBS area code",
+          "network_type": "Network type",
+          "eid": "eid (optional; empty = auto-fetch)",
+          "hard_platform": "hard_platform (model)",
+          "app_version": "app_version",
+          "plat_version": "plat_version",
+          "channel": "channel",
+          "plat": "plat",
           "scan_interval": "Scan interval (seconds)",
           "device_id_override": "device_id override (blank = md5(android_id))"
         }
@@ -92,7 +111,8 @@
     "abort": {
       "cannot_connect": "Discovery failed. Check tgt and retry.",
       "no_houses": "No homes returned for this account.",
-      "no_devices": "No devices cached. Use Re-discover first."
+      "no_devices": "No devices cached. Use Re-discover first.",
+      "missing_device_config": "Missing color_* credentials or android_id. Open 'Credentials & device info' and fill them first."
     }
   },
   "services": {

@@ -58,16 +58,35 @@
       "init": {
         "title": "小京鱼选项",
         "menu_options": {
-          "creds": "更新 tgt / 轮询间隔",
+          "settings": "凭据与设备信息",
           "rediscover": "重新发现设备",
           "streams": "编辑传感器 / 单位",
           "manual": "手动填设备"
         }
       },
-      "creds": {
-        "title": "凭据与轮询",
+      "settings": {
+        "title": "凭据与设备信息",
+        "description": "彩虹 color_* 用于发现设备；seg1/key 用于快照轮询；android_id 自动算 aid/device_id；eid 留空则自动获取。从旧版升级的条目：在这里把 color_* / android_id 等补填好，再点「重新发现设备」。",
         "data": {
-          "tgt": "tgt（过期时更新）",
+          "color_sign_secret": "color_sign_secret（彩虹 HMAC 密钥）",
+          "color_pin": "color_pin（Cookie 的 pin）",
+          "color_jmafinger": "color_jmafinger（Cookie 的 UUID）",
+          "tgt": "tgt（登录票据）",
+          "seg1": "seg1（恒定标识）",
+          "key": "HmacSHA1 密钥",
+          "android_id": "android_id（16 位 hex）",
+          "d_brand": "品牌",
+          "d_model": "型号",
+          "os_version": "系统版本（SDK_INT，如 28）",
+          "screen": "分辨率（如 1080*2160）",
+          "area": "LBS 区域码",
+          "network_type": "网络类型",
+          "eid": "eid（可选；留空=自动获取）",
+          "hard_platform": "hard_platform（机型）",
+          "app_version": "app_version",
+          "plat_version": "plat_version",
+          "channel": "channel",
+          "plat": "plat",
           "scan_interval": "轮询间隔（秒）",
           "device_id_override": "device_id 覆盖（留空 = md5(android_id)）"
         }
@@ -92,7 +111,8 @@
     "abort": {
       "cannot_connect": "发现失败。请检查 tgt 后重试。",
       "no_houses": "该账号没有返回任何家庭。",
-      "no_devices": "尚无缓存设备。请先用「重新发现设备」。"
+      "no_devices": "尚无缓存设备。请先用「重新发现设备」。",
+      "missing_device_config": "缺少 color_* 凭据或 android_id。请先打开「凭据与设备信息」填好，再重新发现。"
     }
   },
   "services": {

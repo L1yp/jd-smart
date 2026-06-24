@@ -103,6 +103,35 @@ def _device_schema(d: dict) -> vol.Schema:
     )
 
 
+def _settings_schema(cfg: dict, opts: dict) -> vol.Schema:
+    """选项里「凭据与设备信息」一站式编辑（旧条目补齐 / 随时修改）。默认值取 merged 配置。"""
+    return vol.Schema(
+        {
+            vol.Required(CONF_COLOR_SIGN_SECRET, default=cfg.get(CONF_COLOR_SIGN_SECRET, "")): str,
+            vol.Required(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
+            vol.Required(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
+            vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
+            vol.Required(CONF_SEG1, default=cfg.get(CONF_SEG1, "")): str,
+            vol.Required(CONF_KEY, default=cfg.get(CONF_KEY, "")): str,
+            vol.Required(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
+            vol.Required(CONF_D_BRAND, default=cfg.get(CONF_D_BRAND, DEFAULT_D_BRAND)): str,
+            vol.Required(CONF_D_MODEL, default=cfg.get(CONF_D_MODEL, DEFAULT_D_MODEL)): str,
+            vol.Required(CONF_OS_VERSION, default=cfg.get(CONF_OS_VERSION, DEFAULT_OS_VERSION)): str,
+            vol.Required(CONF_SCREEN, default=cfg.get(CONF_SCREEN, DEFAULT_SCREEN)): str,
+            vol.Required(CONF_AREA, default=cfg.get(CONF_AREA, DEFAULT_AREA)): str,
+            vol.Required(CONF_NETWORK_TYPE, default=cfg.get(CONF_NETWORK_TYPE, DEFAULT_NETWORK_TYPE)): str,
+            vol.Optional(CONF_EID, default=cfg.get(CONF_EID, "")): str,
+            vol.Required(CONF_HARD_PLATFORM, default=cfg.get(CONF_HARD_PLATFORM, DEFAULT_HARD_PLATFORM)): str,
+            vol.Required(CONF_APP_VERSION, default=cfg.get(CONF_APP_VERSION, DEFAULT_APP_VERSION)): str,
+            vol.Required(CONF_PLAT_VERSION, default=cfg.get(CONF_PLAT_VERSION, DEFAULT_PLAT_VERSION)): str,
+            vol.Required(CONF_CHANNEL, default=cfg.get(CONF_CHANNEL, DEFAULT_CHANNEL)): str,
+            vol.Required(CONF_PLAT, default=cfg.get(CONF_PLAT, DEFAULT_PLAT)): str,
+            vol.Optional(CONF_SCAN_INTERVAL, default=cfg.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)): int,
+            vol.Optional(CONF_DEVICE_ID_OVERRIDE, default=opts.get(CONF_DEVICE_ID_OVERRIDE, "")): str,
+        }
+    )
+
+
 # ── 共享纯函数 ─────────────────────────────────────────────────────────────
 def _assemble_profile(data: dict, eid: str) -> dict:
     """从 entry data + eid 拼出彩虹 color_profile（固定常量 + 设备描述 + eid）。"""
@@ -136,11 +165,12 @@ def _build_color_client(hass, data: dict, eid: str) -> JdColorClient:
 
 
 def _device_id_for(data: dict, options: dict | None = None) -> str:
-    """getDeviceSnapshot 的 device_id：优先 options 覆盖，否则 md5(android_id)。"""
+    """getDeviceSnapshot 的 device_id：优先 options 覆盖，否则 md5(android_id)；都没有返回空串。"""
     override = ((options or {}).get(CONF_DEVICE_ID_OVERRIDE) or "").strip()
     if override:
         return override
-    return hashlib.md5(data[CONF_ANDROID_ID].encode("utf-8")).hexdigest()
+    aid = data.get(CONF_ANDROID_ID)
+    return hashlib.md5(aid.encode("utf-8")).hexdigest() if aid else ""
 
 
 def _parse_houses(resp: dict) -> list[dict]:
@@ -202,22 +232,30 @@ async def _async_resolve_eid(hass, data: dict) -> tuple[str | None, str | None]:
     return eid, None
 
 
-async def _async_fetch_houses(hass, data: dict) -> list[dict]:
-    client = _build_color_client(hass, data, data[CONF_EID])
+async def _async_fetch_houses(hass, cfg: dict, eid: str) -> list[dict]:
+    client = _build_color_client(hass, cfg, eid)
     return _parse_houses(await client.get_houses())
 
 
-async def _async_fetch_devices(hass, data: dict, house_ids: list[str]) -> list[dict]:
-    client = _build_color_client(hass, data, data[CONF_EID])
-    did = _device_id_for(data)
+async def _async_fetch_devices(hass, cfg: dict, eid: str, house_ids: list[str], device_id: str) -> list[dict]:
+    client = _build_color_client(hass, cfg, eid)
     out: list[dict] = []
     for hid in house_ids:
         try:
             resp = await client.get_all_devices(hid)
         except JdColorError:
             continue
-        out.extend(parse_device_list(resp, requester_device_id=did))
+        out.extend(parse_device_list(resp, requester_device_id=device_id))
     return _dedupe_by_feed(out)
+
+
+def merged_config(entry) -> dict:
+    """entry.data 叠加 entry.options（非空覆盖）。让选项里补填的 凭据/设备档/eid 生效，旧条目也能用。"""
+    cfg = dict(entry.data)
+    for k, v in (entry.options or {}).items():
+        if v not in (None, ""):
+            cfg[k] = v
+    return cfg
 
 
 def _houses_select(houses: list[dict], default: list[str]) -> vol.Schema:
@@ -315,7 +353,7 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.ConfigFlowResult:
         if not self._houses:
             try:
-                self._houses = await _async_fetch_houses(self.hass, self._data)
+                self._houses = await _async_fetch_houses(self.hass, self._data, self._data[CONF_EID])
             except Exception:  # noqa: BLE001  网络/风控/签名失败统一中止
                 return self.async_abort(reason="cannot_connect")
             if not self._houses:
@@ -332,7 +370,8 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if not self._all_devices:
             try:
                 self._all_devices = await _async_fetch_devices(
-                    self.hass, self._data, self._selected_house_ids
+                    self.hass, self._data, self._data[CONF_EID],
+                    self._selected_house_ids, _device_id_for(self._data),
                 )
             except Exception:  # noqa: BLE001
                 return self.async_abort(reason="cannot_connect")
@@ -378,6 +417,7 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
         self._selected_house_ids: list[str] = []
         self._all_devices: list[dict] = []
         self._edit_feed: str | None = None
+        self._eid: str | None = None
 
     def _merged_options(self, **updates) -> dict:
         opts = dict(self._entry.options)
@@ -389,36 +429,37 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.ConfigFlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["creds", "rediscover", "streams", "manual"],
+            menu_options=["settings", "rediscover", "streams", "manual"],
         )
 
-    # --- 更新凭据/间隔 ---
-    async def async_step_creds(
+    # --- 凭据与设备信息（一站式编辑；旧条目在此补齐 color 凭据/android_id/eid）---
+    async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         if user_input is not None:
+            self._eid = None  # 设备档可能变了，下次重新发现时重新解析 eid
             return self.async_create_entry(title="", data=self._merged_options(**user_input))
-        o = self._entry.options
-        schema = vol.Schema(
-            {
-                vol.Optional(
-                    CONF_TGT, default=o.get(CONF_TGT, self._entry.data.get(CONF_TGT, ""))
-                ): str,
-                vol.Optional(
-                    CONF_SCAN_INTERVAL, default=o.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-                ): int,
-                vol.Optional(CONF_DEVICE_ID_OVERRIDE, default=o.get(CONF_DEVICE_ID_OVERRIDE, "")): str,
-            }
+        cfg = merged_config(self._entry)
+        return self.async_show_form(
+            step_id="settings", data_schema=_settings_schema(cfg, self._entry.options)
         )
-        return self.async_show_form(step_id="creds", data_schema=schema)
 
     # --- 重选设备（houses → devices）---
     async def async_step_rediscover(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
+        cfg = merged_config(self._entry)
+        # 旧条目可能没填 color 凭据/android_id：先去「凭据与设备信息」补齐
+        if not cfg.get(CONF_ANDROID_ID) or not cfg.get(CONF_COLOR_SIGN_SECRET):
+            return self.async_abort(reason="missing_device_config")
+        if self._eid is None:
+            eid, err = await _async_resolve_eid(self.hass, cfg)
+            if err:
+                return self.async_abort(reason="cannot_connect")
+            self._eid = eid
         if not self._houses:
             try:
-                self._houses = await _async_fetch_houses(self.hass, self._entry.data)
+                self._houses = await _async_fetch_houses(self.hass, cfg, self._eid)
             except Exception:  # noqa: BLE001
                 return self.async_abort(reason="cannot_connect")
             if not self._houses:
@@ -435,10 +476,17 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
     async def async_step_redevices(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
+        cfg = merged_config(self._entry)
+        if self._eid is None:
+            eid, err = await _async_resolve_eid(self.hass, cfg)
+            if err:
+                return self.async_abort(reason="cannot_connect")
+            self._eid = eid
         if not self._all_devices:
             try:
                 self._all_devices = await _async_fetch_devices(
-                    self.hass, self._entry.data, self._selected_house_ids
+                    self.hass, cfg, self._eid, self._selected_house_ids,
+                    _device_id_for(cfg, self._entry.options),
                 )
             except Exception:  # noqa: BLE001
                 return self.async_abort(reason="cannot_connect")
@@ -446,7 +494,7 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
                 return self.async_abort(reason="no_devices")
         if user_input is not None:
             selected = set(user_input["devices"])
-            did = _device_id_for(self._entry.data, self._entry.options)
+            did = _device_id_for(cfg, self._entry.options)
             cache = [
                 _device_cache_entry(d, did)
                 for d in self._all_devices
@@ -531,7 +579,7 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         if user_input is not None:
-            did = _device_id_for(self._entry.data, self._entry.options)
+            did = _device_id_for(merged_config(self._entry), self._entry.options)
             cache = _parse_manual_devices(user_input.get("manual", ""), did)
             return self.async_create_entry(title="", data=self._merged_options(**{CONF_DEVICES: cache}))
         existing = self._entry.options.get(CONF_DEVICES) or []
