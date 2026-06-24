@@ -16,22 +16,20 @@
     交互模式里也支持：直接敲 `devices 1388207`，或先敲 functionId 再按提示输 body。
 
 jd_smart_secrets.json 需要的字段（彩虹网关）:
-    必填:
-      color_sign_secret   native getSecretKey() 的 32 字符（HMAC 密钥）
+    必填（4 个，抓一次基本不变）:
+      color_sign_secret   native getSecretKey() 的 32 字符（HMAC 密钥，App 常量）
       color_pin           Cookie 的 pin（如 jd_xxx）
       color_jmafinger     Cookie 的 whwswswws / jmafinger（一个 UUID）
       tgt                 登录票据（会过期，需刷新）
-    设备档（二选一）:
-      ① color_profile（推荐，明文易改）
-         color_profile = {aid,uuid,appid,area,build,client,clientVersion,d_brand,
-                          d_model,eid,ext,networkType,osVersion,partner,screen}
-         · 顶层给 android_id（设备 Settings.Secure.ANDROID_ID）则自动算 aid=uuid=md5(android_id)，
-           color_profile 里就可不写 aid/uuid（写了也会被 android_id 覆盖）。
-      ② color_ep（旧格式，抓包的 ciphertype:5 密文信封，自动解出 profile）
-    可选（两个 hdid 都能省）:
-      color_body_hdid   不填则自动按 base64(sha256(eid)) 派生
-      color_ep_hdid     ep 信封 hdid；不填留空——读接口(getHouses/getAllDevices)实测可用，
-                        写/绑定接口若报错再补抓包原值（它哈希的是永久 id，推不出来）
+    设备档（明文 color_profile 推荐；与旧格式密文 color_ep 二选一）:
+      android_id          设备 Settings.Secure.ANDROID_ID（16hex）
+      color_profile = {eid, d_brand, d_model, osVersion, screen, area, networkType,
+                       appid, build, client, clientVersion, ext, partner}
+    —— hdid 和 aid/uuid 都不用填，工具按上面的「设备信息」自动算出来：
+      aid / uuid       = md5(android_id)        （不必写进 color_profile）
+      color_body_hdid  = base64(sha256(eid))     （body 信封 hdid）
+      color_ep_hdid    留空即可——读接口(getHouses/getAllDevices)实测可用；
+                       仅写/绑定接口可能要补抓包原值（它哈希永久 id，推不出来）
 
     没有明文 color_profile？跑一次把现有密文 color_ep 转成可粘贴的明文块:
         python color_test.py --dump-profile
@@ -105,17 +103,18 @@ def _load_client(color_api, secrets_path):
 
     prof = cfg.get("color_profile")
     if isinstance(prof, dict) and prof:
-        # 有 android_id 时 aid/uuid 由它自动算，profile 里可缺省/留占位（会被覆盖）
-        need = [k for k in prof if not (android_id and k in ("aid", "uuid"))]
-        if all(_filled(prof[k]) for k in need):
-            # ① 明文设备档（推荐）：ep_hdid 取 color_ep_hdid，或仍兼容从 color_ep.hdid 拿
+        # aid/uuid 不是设备档必填：优先 android_id 自动算 md5，其次 profile 里直接写；其余字段须填好
+        core = [k for k in prof if k not in ("aid", "uuid")]
+        if all(_filled(prof[k]) for k in core):
+            # ① 明文设备档（推荐）。aid/uuid 来源二选一
+            if not android_id and not _filled(prof.get("aid")):
+                sys.exit(f"[!] {name} 缺 aid/uuid 来源：填顶层 android_id（自动 md5 算），或在 color_profile 写 aid/uuid。")
+            # ep.hdid 哈希的是永久 id、推不出；不填留空（读接口实测可用）。仍兼容从旧密文 color_ep.hdid 拿
             ep_hdid = cfg.get("color_ep_hdid") or (cfg.get("color_ep") or {}).get("hdid", "")
             if not _filled(ep_hdid):
-                ep_hdid = ""   # ep 不进 sign：读接口(getHouses/getAllDevices)实测留空也 code=0
+                ep_hdid = ""
                 print(f"[i] {name} 未填 color_ep_hdid：ep.hdid 留空（读接口可用；写/绑定接口如报错再补抓包原值）。",
                       file=sys.stderr)
-            if not android_id and not _filled(prof.get("aid")):
-                sys.exit(f"[!] {name} 的 color_profile 缺 aid/uuid；填 android_id 自动算，或直接写 aid/uuid。")
             return color_api.JdColorClient(None, profile=prof, android_id=android_id,
                                            ep_hdid=ep_hdid, **common)
 
@@ -128,13 +127,17 @@ def _load_client(color_api, secrets_path):
 
 
 def dump_profile(color_api, client):
-    """把当前生效的设备档导成可粘贴进 secrets 的明文块（密文 color_ep -> 明文 color_profile）。"""
-    snippet = {
-        "color_profile": {k: client.profile[k] for k in color_api.DEVICE_KEYS if k in client.profile},
-        "color_ep_hdid": client.ep_hdid,
-        "color_body_hdid": client.body_hdid,
-    }
-    print("# 把下面三项粘进 jd_smart_secrets.json（可删掉旧的密文 color_ep）：")
+    """把当前生效的设备档导成可粘贴进 secrets 的明文块（密文 color_ep -> 明文 color_profile）。
+
+    只导"推不出来"的：color_profile（含 aid/uuid，方便没记 android_id 时直接用）+ color_ep_hdid。
+    不导 color_body_hdid —— 它 = base64(sha256(eid))，工具自动派生，填了只是冗余。
+    """
+    snippet = {"color_profile": {k: client.profile[k] for k in color_api.DEVICE_KEYS if k in client.profile}}
+    if _filled(client.ep_hdid):
+        snippet["color_ep_hdid"] = client.ep_hdid
+    print("# 粘进 jd_smart_secrets.json（可删掉旧的密文 color_ep）：")
+    print("# · 记得设备 android_id 的话，建议改填顶层 android_id（自动算 aid/uuid），删掉 profile 里的 aid/uuid。")
+    print("# · color_body_hdid 不用填，工具按 base64(sha256(eid)) 自动派生。")
     print(json.dumps(snippet, ensure_ascii=False, indent=2))
 
 
