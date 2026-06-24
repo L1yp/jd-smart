@@ -2,35 +2,97 @@
   "config": {
     "step": {
       "user": {
-        "title": "小京鱼 JD Smart",
-        "description": "填入从 App 抓到的签名常量。seg1/key 长期不变；tgt 是登录票据，会过期。device_md 每天滚动，已自动计算，无需填写。",
+        "title": "小京鱼 JD Smart —— 凭据",
+        "description": "彩虹网关（color_*）用于发现设备；seg1/key 用于快照轮询；tgt 是两者共用的登录票据，会过期。均从 App 抓包获得。",
         "data": {
+          "color_sign_secret": "color_sign_secret（彩虹 HMAC 密钥）",
+          "color_pin": "color_pin（Cookie 的 pin）",
+          "color_jmafinger": "color_jmafinger（Cookie 的 UUID）",
+          "tgt": "tgt（登录票据）",
           "seg1": "seg1（恒定标识）",
           "key": "HmacSHA1 密钥",
-          "tgt": "tgt（登录票据）",
           "hard_platform": "hard_platform（机型）",
           "app_version": "app_version",
           "plat_version": "plat_version",
           "channel": "channel",
           "plat": "plat"
         }
+      },
+      "device": {
+        "title": "设备档与 eid",
+        "description": "android_id 会自动算出 aid/uuid/device_id。eid 留空则按 android_id 走 ds.json 自动获取并缓存到磁盘；已知抓包 eid 也可直接填。",
+        "data": {
+          "android_id": "android_id（Settings.Secure.ANDROID_ID，16 位 hex）",
+          "d_brand": "品牌",
+          "d_model": "型号",
+          "os_version": "系统版本（SDK_INT，如 28）",
+          "screen": "分辨率（如 1080*2160）",
+          "area": "LBS 区域码",
+          "network_type": "网络类型",
+          "eid": "eid（可选；留空=自动获取）"
+        }
+      },
+      "houses": {
+        "title": "选择家庭",
+        "description": "勾选要从中拉取设备的家庭。",
+        "data": {"houses": "家庭"}
+      },
+      "devices": {
+        "title": "选择设备",
+        "description": "勾选要纳管的设备。传感器会按每台设备的 streams 自动生成。",
+        "data": {"devices": "设备"}
       }
     },
+    "error": {
+      "eid_fetch_failed": "获取 eid 失败：{detail}。可手动填一个 eid，或检查 android_id/网络。"
+    },
     "abort": {
-      "already_configured": "该账号已配置"
+      "already_configured": "该设备已配置",
+      "cannot_connect": "发现失败（网络 / 风控 / 凭据）。请检查 tgt 后重试。",
+      "no_houses": "该账号没有返回任何家庭。",
+      "no_devices": "所选家庭里没有发现设备。"
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "小京鱼选项",
-        "description": "tgt 过期可在此更新。设备：每行一个，格式 名称|device_id|feed_id。",
-        "data": {
-          "tgt": "tgt（登录票据，过期时更新）",
-          "scan_interval": "轮询间隔（秒）",
-          "devices": "设备列表（名称|device_id|feed_id，每行一个）"
+        "menu_options": {
+          "creds": "更新 tgt / 轮询间隔",
+          "rediscover": "重新发现设备",
+          "streams": "编辑传感器 / 单位",
+          "manual": "手动填设备"
         }
+      },
+      "creds": {
+        "title": "凭据与轮询",
+        "data": {
+          "tgt": "tgt（过期时更新）",
+          "scan_interval": "轮询间隔（秒）",
+          "device_id_override": "device_id 覆盖（留空 = md5(android_id)）"
+        }
+      },
+      "rediscover": {"title": "选择家庭", "data": {"houses": "家庭"}},
+      "redevices": {"title": "选择设备", "data": {"devices": "设备"}},
+      "streams": {
+        "title": "编辑传感器",
+        "description": "选一台设备来逐个编辑它的 stream。",
+        "data": {"device": "设备"}
+      },
+      "edit_device": {
+        "title": "{device} 的传感器",
+        "description": "逐个 stream 设置 name__（名称）/ unit__（单位）/ enabled__（启用）。card_desc 给的单位可能不准，可在此修正。"
+      },
+      "manual": {
+        "title": "手动填设备",
+        "description": "每行一个：名称|feed_id。device_id 自动取 md5(android_id)。",
+        "data": {"manual": "设备（名称|feed_id，每行一个）"}
       }
+    },
+    "abort": {
+      "cannot_connect": "发现失败。请检查 tgt 后重试。",
+      "no_houses": "该账号没有返回任何家庭。",
+      "no_devices": "尚无缓存设备。请先用「重新发现设备」。"
     }
   },
   "services": {

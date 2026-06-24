@@ -10,9 +10,9 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BINARY_STREAMS, DOMAIN
+from .const import DOMAIN
 from .coordinator import JdSmartCoordinator
-from .sensor import device_info
+from .sensor import device_info, is_binary_stream, overrides_for, resolve_stream, stream_enabled
 
 _OFF_VALUES = {"0", "", "false", "False", "off", "OFF", "no"}
 
@@ -33,8 +33,11 @@ async def async_setup_entry(
             snap = data.get(dev["feed_id"])
             if not snap:
                 continue
+            ov = overrides_for(coordinator, dev["feed_id"])
             for stream_id in snap.get("streams", {}):
-                if stream_id not in BINARY_STREAMS:
+                if not is_binary_stream(dev, stream_id):
+                    continue
+                if not stream_enabled(ov, stream_id):
                     continue
                 key = (dev["feed_id"], stream_id)
                 if key in known:
@@ -57,7 +60,8 @@ class JdStreamBinarySensor(CoordinatorEntity[JdSmartCoordinator], BinarySensorEn
         self._feed = dev["feed_id"]
         self._stream = stream_id
         base = dev.get("name") or f"JD {self._feed}"
-        self._attr_name = f"{base} {stream_id}"
+        meta = resolve_stream(dev, stream_id, overrides_for(coordinator, self._feed))
+        self._attr_name = f"{base} {meta['name']}"
         self._attr_unique_id = f"{entry.entry_id}_{self._feed}_{stream_id}"
         self._attr_device_info = device_info(dev)
 

@@ -1,6 +1,7 @@
 """JD Smart (小京鱼) integration."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 
@@ -16,8 +17,10 @@ from .api import JdSmartClient, JdSmartError, parse_snapshot
 from .const import (
     ATTR_DEVICE_ID,
     ATTR_FEED_ID,
+    CONF_ANDROID_ID,
     CONF_APP_VERSION,
     CONF_CHANNEL,
+    CONF_DEVICE_ID_OVERRIDE,
     CONF_DEVICES,
     CONF_HARD_PLATFORM,
     CONF_KEY,
@@ -25,6 +28,7 @@ from .const import (
     CONF_PLAT_VERSION,
     CONF_SCAN_INTERVAL,
     CONF_SEG1,
+    CONF_STREAM_OVERRIDES,
     CONF_TGT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -36,8 +40,23 @@ from .coordinator import JdSmartCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
+def _load_devices(entry: ConfigEntry) -> list[dict]:
+    """读 entry.options 里的设备：新版是结构化 list[dict]（含 card_meta），旧版兼容文本。
+
+    统一 device_id：options 覆盖 > 缓存值 > md5(android_id)。运行时轮询只需 device_id+feed_id。
+    """
+    raw = entry.options.get(CONF_DEVICES)
+    devices = [dict(d) for d in raw] if isinstance(raw, list) else parse_devices(raw)
+    android_id = entry.data.get(CONF_ANDROID_ID)
+    override = (entry.options.get(CONF_DEVICE_ID_OVERRIDE) or "").strip()
+    default_did = hashlib.md5(android_id.encode("utf-8")).hexdigest() if android_id else None
+    for d in devices:
+        d["device_id"] = override or d.get("device_id") or default_did
+    return devices
+
+
 def parse_devices(text: str | None) -> list[dict]:
-    """每行 '名称|device_id|feed_id'（名称可省略）；也支持用 ; 分隔。"""
+    """旧版文本格式兼容：每行 '名称|device_id|feed_id'（名称可省略）；也支持用 ; 分隔。"""
     devices: list[dict] = []
     if not text:
         return devices
@@ -76,10 +95,11 @@ def _client_from_entry(hass: HomeAssistant, entry: ConfigEntry) -> JdSmartClient
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = _client_from_entry(hass, entry)
-    devices = parse_devices(entry.options.get(CONF_DEVICES, ""))
+    devices = _load_devices(entry)
     scan = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    overrides = entry.options.get(CONF_STREAM_OVERRIDES, {}) or {}
 
-    coordinator = JdSmartCoordinator(hass, client, devices, scan)
+    coordinator = JdSmartCoordinator(hass, client, devices, scan, stream_overrides=overrides)
     if devices:
         await coordinator.async_config_entry_first_refresh()
 

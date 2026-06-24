@@ -22,6 +22,7 @@ class JdSmartCoordinator(DataUpdateCoordinator):
         client: JdSmartClient,
         devices: list[dict],
         scan_interval: int,
+        stream_overrides: dict | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -31,6 +32,8 @@ class JdSmartCoordinator(DataUpdateCoordinator):
         )
         self.client = client
         self.devices = devices
+        # {feed_id(str): {stream_id: {name,unit,enabled}}}，sensor/binary_sensor 复合用户覆盖用
+        self.stream_overrides = stream_overrides or {}
 
     async def _async_update_data(self) -> dict:
         result: dict = {}

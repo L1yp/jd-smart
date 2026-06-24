@@ -67,6 +67,51 @@ SENSOR_META: dict[str, dict] = {
 }
 
 
+def overrides_for(coordinator, feed) -> dict:
+    """该设备的用户流覆盖：{stream_id: {name,unit,enabled}}。键按 str(feed_id) 存。"""
+    return (getattr(coordinator, "stream_overrides", None) or {}).get(str(feed)) or {}
+
+
+def stream_enabled(overrides: dict, stream_id: str) -> bool:
+    ov = overrides.get(stream_id)
+    return ov.get("enabled", True) if ov else True
+
+
+def is_binary_stream(dev: dict, stream_id: str) -> bool:
+    """开关量判定：静态 BINARY_STREAMS，或 card_control 可控且恰好两档(on/off)。"""
+    if stream_id in BINARY_STREAMS:
+        return True
+    cm = (dev.get("card_meta") or {}).get(stream_id) or {}
+    return bool(cm.get("controllable")) and len(cm.get("options") or {}) == 2
+
+
+def resolve_stream(dev: dict, stream_id: str, overrides: dict) -> dict:
+    """复合「用户覆盖 > card_meta > 内置 SENSOR_META」。
+
+    - name：覆盖名 > card_desc.stream_text > stream_id（名称可套用）
+    - unit：覆盖单位 > 内置单位 > card_desc.unit（单位可能不准，用户可改）
+    - factor/state_class/precision：始终取内置（物理缩放，与单位绑定）
+    - device_class：仅在内置已知且单位未被改动时保留（避免 HA 单位/类约束告警）
+    - options：card_desc/card_control 的 {code: label}，有则当枚举按 label 显示
+    """
+    cm = (dev.get("card_meta") or {}).get(stream_id) or {}
+    bi = SENSOR_META.get(stream_id, {})
+    ov = overrides.get(stream_id) or None
+    bi_unit = bi.get("unit")
+    unit = ov["unit"] if (ov and ov.get("unit")) else (bi_unit or cm.get("unit"))
+    device_class = bi.get("device_class") if (bi.get("device_class") and unit == bi_unit) else None
+    return {
+        "name": (ov.get("name") if ov else None) or cm.get("name") or stream_id,
+        "enabled": ov.get("enabled", True) if ov else True,
+        "unit": unit,
+        "factor": bi.get("factor", 1),
+        "device_class": device_class,
+        "state_class": bi.get("state_class"),
+        "precision": bi.get("precision"),
+        "options": cm.get("options") or None,
+    }
+
+
 def _num(value):
     """能转数字就转（int/float），否则原样返回字符串。"""
     if value is None:
@@ -110,11 +155,14 @@ async def async_setup_entry(
                 continue
             feed = dev["feed_id"]
             streams = snap.get("streams", {})
+            ov = overrides_for(coordinator, feed)
             for stream_id in streams:
-                if stream_id in BINARY_STREAMS:
+                if is_binary_stream(dev, stream_id):
                     continue  # 开关量交给 binary_sensor 平台
                 if stream_id == POWER_STREAM:
                     continue  # 实时功率由专门实体呈现
+                if not stream_enabled(ov, stream_id):
+                    continue  # 用户在选项里禁用了该流
                 key = (feed, stream_id)
                 if key in known:
                     continue
@@ -181,20 +229,21 @@ class JdStreamSensor(CoordinatorEntity[JdSmartCoordinator], SensorEntity):
         self._feed = dev["feed_id"]
         self._stream = stream_id
         base = dev.get("name") or f"JD {self._feed}"
-        self._attr_name = f"{base} {stream_id}"
+        meta = resolve_stream(dev, stream_id, overrides_for(coordinator, self._feed))
+        self._factor = meta["factor"]
+        self._options = meta["options"]  # {code: label}；有则按枚举映射 label，不加单位/缩放
+        self._attr_name = f"{base} {meta['name']}"
         self._attr_unique_id = f"{entry.entry_id}_{self._feed}_{stream_id}"
         self._attr_device_info = device_info(dev)
-
-        meta = SENSOR_META.get(stream_id, {})
-        self._factor = meta.get("factor", 1)
-        if meta.get("device_class"):
-            self._attr_device_class = meta["device_class"]
-        if meta.get("unit"):
-            self._attr_native_unit_of_measurement = meta["unit"]
-        if meta.get("state_class"):
-            self._attr_state_class = meta["state_class"]
-        if meta.get("precision") is not None:
-            self._attr_suggested_display_precision = meta["precision"]
+        if not self._options:
+            if meta["unit"]:
+                self._attr_native_unit_of_measurement = meta["unit"]
+            if meta["device_class"]:
+                self._attr_device_class = meta["device_class"]
+            if meta["state_class"]:
+                self._attr_state_class = meta["state_class"]
+            if meta["precision"] is not None:
+                self._attr_suggested_display_precision = meta["precision"]
 
     def _snap(self):
         return (self.coordinator.data or {}).get(self._feed)
@@ -204,7 +253,10 @@ class JdStreamSensor(CoordinatorEntity[JdSmartCoordinator], SensorEntity):
         snap = self._snap()
         if not snap:
             return None
-        val = _num(snap.get("streams", {}).get(self._stream))
+        raw = snap.get("streams", {}).get(self._stream)
+        if self._options:  # 枚举流：把码值映射成中文 label（如 Mode 1 -> 制冷）
+            return self._options.get(str(raw), raw)
+        val = _num(raw)
         if self._factor != 1 and isinstance(val, (int, float)):
             return round(val * self._factor, 6)
         return val

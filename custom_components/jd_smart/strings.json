@@ -2,35 +2,97 @@
   "config": {
     "step": {
       "user": {
-        "title": "JD Smart (小京鱼)",
-        "description": "Enter the signing constants captured from the app. seg1/key are long-lived; tgt is the login ticket and expires. device_md is computed automatically (it rolls daily).",
+        "title": "JD Smart (小京鱼) — Credentials",
+        "description": "Rainbow gateway (color_*) discovers devices; seg1/key drive snapshot polling; tgt is the shared login ticket and expires.",
         "data": {
+          "color_sign_secret": "color_sign_secret (rainbow HMAC key)",
+          "color_pin": "color_pin (cookie pin)",
+          "color_jmafinger": "color_jmafinger (cookie UUID)",
+          "tgt": "tgt (login ticket)",
           "seg1": "seg1 (constant id)",
           "key": "HmacSHA1 key",
-          "tgt": "tgt (login ticket)",
           "hard_platform": "hard_platform (model)",
           "app_version": "app_version",
           "plat_version": "plat_version",
           "channel": "channel",
           "plat": "plat"
         }
+      },
+      "device": {
+        "title": "Device profile & eid",
+        "description": "android_id automatically derives aid/uuid/device_id. Leave eid empty to auto-mint it via ds.json (cached to disk by android_id).",
+        "data": {
+          "android_id": "android_id (Settings.Secure.ANDROID_ID, 16hex)",
+          "d_brand": "Brand",
+          "d_model": "Model",
+          "os_version": "OS version (SDK_INT)",
+          "screen": "Screen (e.g. 1080*2160)",
+          "area": "LBS area code",
+          "network_type": "Network type",
+          "eid": "eid (optional; empty = auto-fetch)"
+        }
+      },
+      "houses": {
+        "title": "Select homes",
+        "description": "Choose which homes to pull devices from.",
+        "data": {"houses": "Homes"}
+      },
+      "devices": {
+        "title": "Select devices",
+        "description": "Choose devices to add. Sensors are built from each device's streams.",
+        "data": {"devices": "Devices"}
       }
     },
+    "error": {
+      "eid_fetch_failed": "Failed to fetch eid: {detail}. Enter an eid manually, or check android_id/network."
+    },
     "abort": {
-      "already_configured": "This account is already configured"
+      "already_configured": "This device is already configured",
+      "cannot_connect": "Discovery failed (network / risk control / credentials). Check tgt and retry.",
+      "no_houses": "No homes returned for this account.",
+      "no_devices": "No devices found in the selected homes."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "JD Smart options",
-        "description": "Update tgt when it expires. Devices: one per line as name|device_id|feed_id.",
-        "data": {
-          "tgt": "tgt (login ticket, update on expiry)",
-          "scan_interval": "Scan interval (seconds)",
-          "devices": "Devices (name|device_id|feed_id, one per line)"
+        "menu_options": {
+          "creds": "Update tgt / interval",
+          "rediscover": "Re-discover devices",
+          "streams": "Edit sensors / units",
+          "manual": "Manual device entry"
         }
+      },
+      "creds": {
+        "title": "Credentials & polling",
+        "data": {
+          "tgt": "tgt (update on expiry)",
+          "scan_interval": "Scan interval (seconds)",
+          "device_id_override": "device_id override (blank = md5(android_id))"
+        }
+      },
+      "rediscover": {"title": "Select homes", "data": {"houses": "Homes"}},
+      "redevices": {"title": "Select devices", "data": {"devices": "Devices"}},
+      "streams": {
+        "title": "Edit sensors",
+        "description": "Pick a device to edit its streams.",
+        "data": {"device": "Device"}
+      },
+      "edit_device": {
+        "title": "Streams of {device}",
+        "description": "For each stream set name__ / unit__ / enabled__. card_desc units may be inaccurate — fix them here."
+      },
+      "manual": {
+        "title": "Manual devices",
+        "description": "One per line: name|feed_id. device_id is auto md5(android_id).",
+        "data": {"manual": "Devices (name|feed_id, one per line)"}
       }
+    },
+    "abort": {
+      "cannot_connect": "Discovery failed. Check tgt and retry.",
+      "no_houses": "No homes returned for this account.",
+      "no_devices": "No devices cached. Use Re-discover first."
     }
   },
   "services": {

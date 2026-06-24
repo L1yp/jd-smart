@@ -110,6 +110,54 @@ def color_sign(preimage: str, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), preimage.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def _flatten_options(options) -> dict | None:
+    """card_desc/card_control 的 options（[{"0":"关"},{"1":"开"}]）拍平成 {"0":"关","1":"开"}。"""
+    if not isinstance(options, list):
+        return None
+    flat: dict = {}
+    for item in options:
+        if isinstance(item, dict):
+            flat.update({str(k): v for k, v in item.items()})
+    return flat or None
+
+
+def build_card_meta(smart_info: dict) -> dict:
+    """复合 smartInfo.card_desc + card_control -> {stream_id: {name, unit, options, controllable}}。
+
+    card_desc 给展示名(stream_text)/单位(unit)/枚举(options)；card_control 标记可控 + on/off 枚举。
+    这是需求里的"复合"步：名称可直接套用，单位可能不准（用户可在选项里改）。
+    """
+    meta: dict[str, dict] = {}
+
+    def _slot(sid):
+        return meta.setdefault(
+            str(sid), {"name": None, "unit": None, "options": None, "controllable": False}
+        )
+
+    for item in smart_info.get("card_desc") or []:
+        sid = item.get("stream_id")
+        if sid is None:
+            continue
+        slot = _slot(sid)
+        if item.get("stream_text"):
+            slot["name"] = item["stream_text"]
+        if item.get("unit"):
+            slot["unit"] = item["unit"]
+        opts = _flatten_options(item.get("options"))
+        if opts:
+            slot["options"] = opts
+    for item in smart_info.get("card_control") or []:
+        sid = item.get("stream_id")
+        if sid is None:
+            continue
+        slot = _slot(sid)
+        slot["controllable"] = True
+        opts = _flatten_options(item.get("options"))
+        if opts and not slot["options"]:
+            slot["options"] = opts
+    return meta
+
+
 def parse_device_list(resp: dict, requester_device_id: str | None = None) -> list[dict]:
     """把 getAllDevices 响应拍平成设备列表（供 HA 选设备绑定 / 轮询用）。
 
@@ -120,6 +168,7 @@ def parse_device_list(resp: dict, requester_device_id: str | None = None) -> lis
         name/room/category/sku/product_id
         streams        快照里有哪些流（如 Voltage/Electric/Power/CurrentPowerSum）
         snapshot       getAllDevices 内联的实时值（彩虹轮询可直接读，免再发 getDeviceSnapshot）
+        card_meta      复合 card_desc+card_control 出的 {stream_id:{name,unit,options,controllable}}
     """
     result = (resp or {}).get("result") or {}
     devices: list[dict] = []
@@ -144,6 +193,7 @@ def parse_device_list(resp: dict, requester_device_id: str | None = None) -> lis
                 "product_id": si.get("product_id"),
                 "streams": list(snap.keys()),
                 "snapshot": snap,
+                "card_meta": build_card_meta(si),
             })
     return devices
 
@@ -368,7 +418,13 @@ def selftest() -> bool:
                      "feedId": 563221780494556020, "sku": "100009400433",
                      "smartInfo": {"feed_id": 563221780494556020, "device_id": "AABBCCDDEEFF",
                                    "category_name": "插座", "product_id": 180600011,
-                                   "snapshot": {"Voltage": "235899", "Power": "1", "Electric": "82"}}},
+                                   "snapshot": {"Voltage": "235899", "Power": "1", "Electric": "82"},
+                                   "card_desc": [
+                                       {"stream_id": "TemperatureSet", "unit": "℃", "stream_text": "温度设置"},
+                                       {"stream_id": "Mode", "stream_text": "当前模式",
+                                        "options": [{"0": "自动"}, {"1": "制冷"}]}],
+                                   "card_control": [
+                                       {"stream_id": "Power", "options": [{"0": "关"}, {"1": "开"}]}]}},
                 ]},
                 {"roomName": "卧室", "deviceList": []},   # 空房间应被跳过
             ],
@@ -384,6 +440,13 @@ def selftest() -> bool:
     check("snapshot 内联可读 + streams 列出",
           d0.get("snapshot", {}).get("Power") == "1"
           and set(d0.get("streams", [])) == {"Voltage", "Power", "Electric"})
+    cm = d0.get("card_meta", {})
+    check("card_meta 复合：名称/单位/枚举/可控",
+          cm.get("TemperatureSet", {}).get("unit") == "℃"
+          and cm.get("TemperatureSet", {}).get("name") == "温度设置"
+          and cm.get("Mode", {}).get("options") == {"0": "自动", "1": "制冷"}
+          and cm.get("Power", {}).get("controllable") is True
+          and cm.get("Power", {}).get("options") == {"0": "关", "1": "开"})
 
     print("\ncolor_api self-test", "PASS" if ok else "FAIL")
     return ok
