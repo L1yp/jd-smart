@@ -100,7 +100,7 @@
       },
       "edit_device": {
         "title": "Streams of {device}",
-        "description": "For each stream set name__ / unit__ / enabled__. card_desc units may be inaccurate — fix them here."
+        "description": "For each stream set name__ / unit__ / enabled__. The field suffix (the part after name__/unit__/enabled__) is the Param ID in the table below; card_desc units may be inaccurate — fix them against the original parameters below.\n\n| Param ID | Original name | Original unit | Options |\n|---|---|---|---|{reference}"
       },
       "manual": {
         "title": "Manual devices",

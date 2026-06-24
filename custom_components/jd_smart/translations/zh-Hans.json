@@ -100,7 +100,7 @@
       },
       "edit_device": {
         "title": "{device} 的传感器",
-        "description": "逐个 stream 设置 name__（名称）/ unit__（单位）/ enabled__（启用）。card_desc 给的单位可能不准，可在此修正。"
+        "description": "逐个 stream 设置 name__（名称）/ unit__（单位）/ enabled__（启用）。表单字段后缀（name__、unit__、enabled__ 后面那段）就是下表的「参数ID」；card_desc 给的单位可能不准，请对照下表的原始参数修改。\n\n| 参数ID | 原名称 | 原单位 | 可选值 |\n|---|---|---|---|{reference}"
       },
       "manual": {
         "title": "手动填设备",

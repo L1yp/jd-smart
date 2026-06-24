@@ -206,6 +206,29 @@ def _device_label(dev: dict) -> str:
     return f"{room} / {dev.get('name') or dev.get('feed_id')}"
 
 
+def _stream_reference_rows(streams: list[str], card_meta: dict) -> str:
+    """编辑表单顶部「原始参数」参考表的数据行（markdown）。
+
+    每行 `| 参数ID | 原名称 | 原单位 | 可选值 |`，表头放在翻译文案里（便于本地化），
+    这里只产数据行（每行前置换行，紧接翻译里的表头分隔行）。让用户对照着改名/改单位。
+    """
+    def _esc(x) -> str:
+        return str(x).replace("|", "\\|").replace("\n", " ")
+
+    rows: list[str] = []
+    for sid in streams:
+        cm = card_meta.get(sid) or {}
+        name = cm.get("name") or "—"
+        unit = cm.get("unit") or "—"
+        opts = cm.get("options")
+        if isinstance(opts, dict) and opts:
+            opt_text = ", ".join(f"{k}={v}" for k, v in opts.items())
+        else:
+            opt_text = "—"
+        rows.append(f"\n| `{_esc(sid)}` | {_esc(name)} | {_esc(unit)} | {_esc(opt_text)} |")
+    return "".join(rows)
+
+
 def _device_cache_entry(d: dict, device_id: str) -> dict:
     """发现结果 → 持久化进 options 的精简结构（含 card_meta 供传感器复合）。"""
     return {
@@ -575,7 +598,10 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="edit_device",
             data_schema=vol.Schema(fields),
-            description_placeholders={"device": dev.get("name") or str(self._edit_feed)},
+            description_placeholders={
+                "device": dev.get("name") or str(self._edit_feed),
+                "reference": _stream_reference_rows(streams, card_meta),
+            },
         )
 
     # --- 兜底手填 ---
