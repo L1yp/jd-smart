@@ -66,3 +66,22 @@ python query_device.py --device-id <id> --feed-id <feed>   # 真正查询
 - 集成本体**不含任何密钥**，全部由你在配置界面填入。
 - `jd_smart_secrets.json`、`*.db`（抓包数据，含你的 token）已被 `.gitignore`，不会进仓库。
 - `tgt` 是登录票据，请勿公开分享；过期后在集成选项里更新。
+
+## 分析流程
+
+```bash
+# 启动frida-server
+/data/local/tmp/fs123 -l 127.0.0.1:8899 &
+
+# adb 转发
+adb forward tcp:8899 tcp:8899
+
+# 开始启动监听
+python host.py -H 127.0.0.1:8899 -p com.jd.iots --spawn
+
+
+python host.py -H 127.0.0.1:8899 -p com.jd.iots -s hook_signatures.js --spawn
+
+# 清除数据
+adb shell pm clear com.jd.iots
+```
