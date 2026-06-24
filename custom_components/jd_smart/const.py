@@ -47,6 +47,12 @@ DEFAULT_CHANNEL = "xjgw-android"
 DEFAULT_PLAT = "Android"
 DEFAULT_SCAN_INTERVAL = 90
 
+# App 全局固定值（所有账号/设备相同，照抄即可）——作为表单默认内置，免得每次手抄。
+# 见 jd_smart_secrets.example.json 的"固定值"标注。
+DEFAULT_SEG1 = "a188caaf009839ba200bb55bb8fa38407a595c2a"
+DEFAULT_KEY = "e685c8d1daa7e4dec8821a3df41c0b34a56db779"
+DEFAULT_COLOR_SIGN_SECRET = "6b086ed29b1a4483b4544143061b295d"
+
 # ── 彩虹设备档：示例默认值（设备相关，用户按需改）+ 固定常量（所有设备相同）──────
 DEFAULT_D_BRAND = "HUAWEI"
 DEFAULT_D_MODEL = "HWI-AL00"

@@ -55,15 +55,18 @@ from .const import (
     DEFAULT_APP_VERSION,
     DEFAULT_AREA,
     DEFAULT_CHANNEL,
+    DEFAULT_COLOR_SIGN_SECRET,
     DEFAULT_D_BRAND,
     DEFAULT_D_MODEL,
     DEFAULT_HARD_PLATFORM,
+    DEFAULT_KEY,
     DEFAULT_NETWORK_TYPE,
     DEFAULT_OS_VERSION,
     DEFAULT_PLAT,
     DEFAULT_PLAT_VERSION,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SCREEN,
+    DEFAULT_SEG1,
     DOMAIN,
 )
 from .device_finger import EidFetchError, async_fetch_eid
@@ -72,12 +75,12 @@ from .eid_cache import async_get_cached_eid, async_save_eid
 # ── 凭据表单（步 user）─────────────────────────────────────────────────────
 ACCOUNT_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_COLOR_SIGN_SECRET): str,
+        vol.Required(CONF_COLOR_SIGN_SECRET, default=DEFAULT_COLOR_SIGN_SECRET): str,
         vol.Required(CONF_COLOR_PIN): str,
         vol.Required(CONF_COLOR_JMAFINGER): str,
         vol.Required(CONF_TGT): str,
-        vol.Required(CONF_SEG1): str,
-        vol.Required(CONF_KEY): str,
+        vol.Required(CONF_SEG1, default=DEFAULT_SEG1): str,
+        vol.Required(CONF_KEY, default=DEFAULT_KEY): str,
         vol.Required(CONF_HARD_PLATFORM, default=DEFAULT_HARD_PLATFORM): str,
         vol.Required(CONF_APP_VERSION, default=DEFAULT_APP_VERSION): str,
         vol.Required(CONF_PLAT_VERSION, default=DEFAULT_PLAT_VERSION): str,
@@ -107,12 +110,13 @@ def _settings_schema(cfg: dict, opts: dict) -> vol.Schema:
     """选项里「凭据与设备信息」一站式编辑（旧条目补齐 / 随时修改）。默认值取 merged 配置。"""
     return vol.Schema(
         {
-            vol.Required(CONF_COLOR_SIGN_SECRET, default=cfg.get(CONF_COLOR_SIGN_SECRET, "")): str,
+            vol.Required(CONF_COLOR_SIGN_SECRET,
+                         default=cfg.get(CONF_COLOR_SIGN_SECRET) or DEFAULT_COLOR_SIGN_SECRET): str,
             vol.Required(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
             vol.Required(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
             vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
-            vol.Required(CONF_SEG1, default=cfg.get(CONF_SEG1, "")): str,
-            vol.Required(CONF_KEY, default=cfg.get(CONF_KEY, "")): str,
+            vol.Required(CONF_SEG1, default=cfg.get(CONF_SEG1) or DEFAULT_SEG1): str,
+            vol.Required(CONF_KEY, default=cfg.get(CONF_KEY) or DEFAULT_KEY): str,
             vol.Required(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
             vol.Required(CONF_D_BRAND, default=cfg.get(CONF_D_BRAND, DEFAULT_D_BRAND)): str,
             vol.Required(CONF_D_MODEL, default=cfg.get(CONF_D_MODEL, DEFAULT_D_MODEL)): str,
