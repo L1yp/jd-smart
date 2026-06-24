@@ -93,6 +93,13 @@ def hdid_from_eid(eid: str) -> str:
     return base64.b64encode(hashlib.sha256(eid.encode("utf-8")).digest()).decode("ascii")
 
 
+def aid_from_android_id(android_id: str) -> str:
+    """aid = uuid = md5HexLower(AndroidId)。
+    来源：da.m2.b() 取 com.jingdong.sdk.baseinfo.BaseInfo.getAndroidId()（=Settings.Secure.ANDROID_ID）
+    再 MD5 小写十六进制；da.m2.h() 存进 SP(jdiots/uuid)。AndroidId 取不到时 App 返回空字符串。"""
+    return hashlib.md5(android_id.encode("utf-8")).hexdigest()
+
+
 def build_preimage(fields: dict) -> str:
     """preimage = 各 value 按 key 字母序、用 '&' 连接（= App TreeMap）。"""
     return "&".join(str(fields[k]) for k in sorted(fields))
@@ -153,6 +160,7 @@ class JdColorClient:
         session=None,
         *,
         profile: dict | None = None,
+        android_id: str | None = None,
         ep_hdid: str = "",
         ep: dict | None = None,
         sign_secret: str,
@@ -166,6 +174,7 @@ class JdColorClient:
         """设备档两种给法（二选一）:
             profile  明文设备档 dict（推荐，可读易改）+ ep_hdid（ep 信封 hdid token）
             ep       抓包的密文 ciphertype:5 信封 dict（旧格式，自动解出 profile）
+        android_id 给了则自动算 aid=uuid=md5(AndroidId)，覆盖 profile 里的 aid/uuid（可不在 profile 里写）。
         body_hdid 不给则按 base64(sha256(eid)) 自动派生。
         """
         self._session = session
@@ -178,6 +187,8 @@ class JdColorClient:
             ep_ridx = ep.get("ridx", ep_ridx)
         else:
             raise ValueError("JdColorClient 需要 profile(明文设备档) 或 ep(密文信封)")
+        if android_id:
+            prof["aid"] = prof["uuid"] = aid_from_android_id(android_id)
         prof.setdefault("uuid", prof.get("aid"))
         prof.setdefault("appid", APPID)
         self.profile = prof
@@ -335,6 +346,16 @@ def selftest() -> bool:
     check("body_hdid 缺省自动派生 = base64(sha256(eid))",
           JdColorClient(None, profile=syn_prof, ep_hdid="X", sign_secret="k" * 32,
                         pin="p", jmafinger="j", tgt="t").body_hdid == hdid_from_eid(syn_prof["eid"]))
+
+    # 3c) android_id -> aid=uuid=md5(AndroidId)，覆盖 profile（profile 里可不写 aid/uuid）
+    import hashlib as _hl
+    aid_expect = _hl.md5("9774d56d682e549c".encode()).hexdigest()
+    prof_no_aid = {k: k.upper() for k in DEVICE_KEYS if k not in ("aid", "uuid")}
+    c_aid = JdColorClient(None, profile=prof_no_aid, android_id="9774d56d682e549c", ep_hdid="X",
+                          sign_secret="k" * 32, pin="p", jmafinger="j", tgt="t")
+    check("android_id -> aid=uuid=md5(AndroidId)（profile 可省 aid/uuid）",
+          aid_from_android_id("9774d56d682e549c") == aid_expect
+          and c_aid.profile["aid"] == aid_expect and c_aid.profile["uuid"] == aid_expect)
 
     # 4) 设备列表解析：合成一条 getAllDevices 响应（非真实值，结构同抓包）
     fake_resp = {

@@ -25,6 +25,8 @@ jd_smart_secrets.json 需要的字段（彩虹网关）:
       ① color_profile（推荐，明文易改）
          color_profile = {aid,uuid,appid,area,build,client,clientVersion,d_brand,
                           d_model,eid,ext,networkType,osVersion,partner,screen}
+         · 顶层给 android_id（设备 Settings.Secure.ANDROID_ID）则自动算 aid=uuid=md5(android_id)，
+           color_profile 里就可不写 aid/uuid（写了也会被 android_id 覆盖）。
       ② color_ep（旧格式，抓包的 ciphertype:5 密文信封，自动解出 profile）
     可选（两个 hdid 都能省）:
       color_body_hdid   不填则自动按 base64(sha256(eid)) 派生
@@ -99,15 +101,23 @@ def _load_client(color_api, secrets_path):
         body_hdid=cfg["color_body_hdid"] if _filled(cfg.get("color_body_hdid")) else None,
     )
 
+    android_id = cfg.get("android_id") if _filled(cfg.get("android_id")) else None
+
     prof = cfg.get("color_profile")
-    if isinstance(prof, dict) and prof and all(_filled(v) for v in prof.values()):
-        # ① 明文设备档（推荐）：ep_hdid 取 color_ep_hdid，或仍兼容从 color_ep.hdid 拿
-        ep_hdid = cfg.get("color_ep_hdid") or (cfg.get("color_ep") or {}).get("hdid", "")
-        if not _filled(ep_hdid):
-            ep_hdid = ""   # ep 不进 sign：读接口(getHouses/getAllDevices)实测留空也 code=0
-            print(f"[i] {name} 未填 color_ep_hdid：ep.hdid 留空（读接口可用；写/绑定接口如报错再补抓包原值）。",
-                  file=sys.stderr)
-        return color_api.JdColorClient(None, profile=prof, ep_hdid=ep_hdid, **common)
+    if isinstance(prof, dict) and prof:
+        # 有 android_id 时 aid/uuid 由它自动算，profile 里可缺省/留占位（会被覆盖）
+        need = [k for k in prof if not (android_id and k in ("aid", "uuid"))]
+        if all(_filled(prof[k]) for k in need):
+            # ① 明文设备档（推荐）：ep_hdid 取 color_ep_hdid，或仍兼容从 color_ep.hdid 拿
+            ep_hdid = cfg.get("color_ep_hdid") or (cfg.get("color_ep") or {}).get("hdid", "")
+            if not _filled(ep_hdid):
+                ep_hdid = ""   # ep 不进 sign：读接口(getHouses/getAllDevices)实测留空也 code=0
+                print(f"[i] {name} 未填 color_ep_hdid：ep.hdid 留空（读接口可用；写/绑定接口如报错再补抓包原值）。",
+                      file=sys.stderr)
+            if not android_id and not _filled(prof.get("aid")):
+                sys.exit(f"[!] {name} 的 color_profile 缺 aid/uuid；填 android_id 自动算，或直接写 aid/uuid。")
+            return color_api.JdColorClient(None, profile=prof, android_id=android_id,
+                                           ep_hdid=ep_hdid, **common)
 
     ep = cfg.get("color_ep")
     if isinstance(ep, dict) and ep.get("cipher"):
