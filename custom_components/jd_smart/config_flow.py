@@ -285,8 +285,16 @@ def merged_config(entry) -> dict:
     return cfg
 
 
+def _clamp_default(default: list[str] | None, valid: list[str]) -> list[str]:
+    """把默认多选值夹紧到当前合法选项：换账号后失效的旧默认（如旧家庭/设备 id）丢弃，
+    全丢光了就回退「全选当前结果」。避免 SelectSelector 因默认值不在 options 里而校验失败。"""
+    kept = [d for d in (default or []) if d in valid]
+    return kept or list(valid)
+
+
 def _houses_select(houses: list[dict], default: list[str]) -> vol.Schema:
     options = [selector.SelectOptionDict(value=h["house_id"], label=h["house_name"]) for h in houses]
+    default = _clamp_default(default, [h["house_id"] for h in houses])
     return vol.Schema(
         {
             vol.Required("houses", default=default): selector.SelectSelector(
@@ -300,6 +308,7 @@ def _devices_select(devices: list[dict], default: list[str]) -> vol.Schema:
     options = [
         selector.SelectOptionDict(value=str(d["feed_id"]), label=_device_label(d)) for d in devices
     ]
+    default = _clamp_default(default, [str(d["feed_id"]) for d in devices])
     return vol.Schema(
         {
             vol.Required("devices", default=default): selector.SelectSelector(
