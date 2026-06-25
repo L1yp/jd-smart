@@ -14,8 +14,20 @@ App Store CDN and converted/resized to the PNG sizes Home Assistant expects
 previous brand/icon@2x.png exists, that is reused; otherwise it falls back to an
 original fish motif so the script never hard-fails offline.
 
-HA 2026.3+ auto-loads this brand/ folder via /api/brands/integration/jd_smart/*,
-so no submission to the home-assistant/brands repo is needed.
+This brand/ folder is the modern, only-needed delivery path — consumed two ways:
+  - HA Core (post-install): on HA 2026.3+ the folder is auto-served via the local
+    brands proxy /api/brands/integration/jd_smart/*, so the "Devices & Services"
+    integration page shows the icon.
+  - HACS: current HACS reads brand/icon.png straight from the GitHub repo for its
+    store/repository list (HACS docs now require a brand/ dir in the repo, with at
+    least icon.png — NOT a home-assistant/brands PR).
+
+Do NOT submit to home-assistant/brands: since HA 2026.3 that repo's
+close-new-custom-integrations.yml auto-closes any new custom_integrations PR.
+Still keep each @2x EXACTLY double its base (see _save_logo_pair) so the images
+stay spec-clean. icon.png must be 256x256 (icon@2x 512x512); logo's shortest side
+128-256 (hDPI 256-512). The browse-list icon is icon.png — push it to the repo's
+default branch and make sure HACS is up to date.
 
 Requires Pillow:  pip install Pillow
 """
@@ -139,9 +151,17 @@ def make_logo(mark_rounded, mark_raw, base=512):
     return img.crop(bbox) if bbox else img
 
 
-def _save_h(img, h, path):
-    w = max(1, round(img.width * h / img.height))
-    img.resize((w, h), Image.LANCZOS).save(path)
+def _save_logo_pair(img, base_h, base_path, hidpi_path):
+    """Save logo.png (height base_h) + logo@2x.png as EXACTLY 2x of it.
+
+    The width is computed ONCE from base_h then doubled, so logo@2x is precisely
+    (2*w, 2*base_h). Rounding each height independently (the old _save_h) gave
+    327x128 vs 655x256 — off by one — which the home-assistant/brands CI rejects.
+    Both sizes are downscaled from the high-res master `img` for quality.
+    """
+    base_w = max(1, round(img.width * base_h / img.height))
+    img.resize((base_w, base_h), Image.LANCZOS).save(base_path)
+    img.resize((base_w * 2, base_h * 2), Image.LANCZOS).save(hidpi_path)
 
 
 def main():
@@ -151,8 +171,8 @@ def main():
     icon.resize((512, 512), Image.LANCZOS).save(os.path.join(BRAND, "icon@2x.png"))
     icon.resize((256, 256), Image.LANCZOS).save(os.path.join(BRAND, "icon.png"))
     logo = make_logo(icon, raw)
-    _save_h(logo, 256, os.path.join(BRAND, "logo@2x.png"))
-    _save_h(logo, 128, os.path.join(BRAND, "logo.png"))
+    _save_logo_pair(logo, 128, os.path.join(BRAND, "logo.png"),
+                    os.path.join(BRAND, "logo@2x.png"))
     print("wrote brand images to", BRAND)
 
 
