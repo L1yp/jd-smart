@@ -300,7 +300,12 @@ def _async_register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(f"eid 解析失败: {err}")
         color_client = _build_color_client(hass, cfg, eid)
         try:
-            raw = await color_client.get_device_details(feed_id)
+            raw = await color_client.get_device_details(
+                feed_id,
+                house_id=dev.get("house_id"),
+                room_id=dev.get("room_id"),
+                device_id=dev.get("hw_device_id"),
+            )
         except JdColorError as e:
             raise HomeAssistantError(f"getDeviceDetails 调用失败: {e}") from e
         model = parse_stream_model(raw)

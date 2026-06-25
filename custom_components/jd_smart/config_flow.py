@@ -243,10 +243,17 @@ def _stream_reference_rows(streams: list[str], card_meta: dict) -> str:
 
 
 def _device_cache_entry(d: dict, device_id: str) -> dict:
-    """发现结果 → 持久化进 options 的精简结构（含 card_meta 供传感器复合）。"""
+    """发现结果 → 持久化进 options 的精简结构（含 card_meta 供传感器复合）。
+
+    house_id/room_id/hw_device_id 供 getDeviceDetails 物模型请求复刻 App body（缺则收不到物模型，
+    只剩 Power 开关）；老缓存无这些字段时需「重新发现」补全。
+    """
     return {
         "feed_id": d["feed_id"],
         "device_id": device_id,
+        "hw_device_id": d.get("hw_device_id"),
+        "house_id": d.get("house_id"),
+        "room_id": d.get("room_id"),
         "name": d.get("name"),
         "room": d.get("room"),
         "category": d.get("category"),

@@ -171,6 +171,7 @@ def parse_device_list(resp: dict, requester_device_id: str | None = None) -> lis
         card_meta      复合 card_desc+card_control 出的 {stream_id:{name,unit,options,controllable}}
     """
     result = (resp or {}).get("result") or {}
+    house_id = result.get("houseId")  # getDeviceDetails body 必带（字符串）
     devices: list[dict] = []
     rooms = result.get("roomList") or []
     # 个别响应把设备直接挂在 result.deviceList（无房间），一并兜底
@@ -178,6 +179,7 @@ def parse_device_list(resp: dict, requester_device_id: str | None = None) -> lis
         rooms = [{"roomName": None, "deviceList": result.get("deviceList")}]
     for room in rooms:
         room_name = room.get("roomName")
+        room_id = room.get("roomId") or (room.get("deviceList") or [{}])[0].get("smartInfo", {}).get("room_id")
         for d in room.get("deviceList") or []:
             si = d.get("smartInfo") or {}
             snap = si.get("snapshot") or {}
@@ -188,6 +190,8 @@ def parse_device_list(resp: dict, requester_device_id: str | None = None) -> lis
                 "hw_device_id": d.get("deviceId") or si.get("device_id"),
                 "name": d.get("deviceName") or si.get("card_name") or (str(feed_id) if feed_id else ""),
                 "room": room_name,
+                "room_id": room_id if room_id is not None else si.get("room_id"),
+                "house_id": house_id,
                 "category": d.get("categoryName") or si.get("category_name"),
                 "sku": d.get("sku") or si.get("sku_id"),
                 "product_id": si.get("product_id"),
@@ -334,15 +338,34 @@ class JdColorClient:
         # 注意：getAllDevices 的 houseId 是字符串（与 getHouseDetails 的数字不同）
         return await self.call("jdsmart.house.getAllDevices", {"houseId": str(house_id)}, **kw)
 
-    async def get_device_details(self, feed_id, **kw) -> dict:
+    @staticmethod
+    def _device_details_body(feed_id, house_id=None, room_id=None, device_id=None) -> dict:
+        """复刻 App 的 getDeviceDetails body（抓包实证 jd_smart_traffic.db）。
+
+        只发 feedId 会被网关判残缺、**不返回**物模型，进而静默回退 card_meta（card_control 只标
+        Power → 只生成一个 Power 开关）。必带：feedId(**数字** int，任意精度，与 getAllDevices 同源)、
+        houseId(字符串)、roomId(数字)、updateAddress=false；deviceId(硬件短 id)可选。键序不影响
+        （抓包里两种顺序都有，网关按解密后 JSON 解析）。house_id/room_id 缺省时只发 feedId
+        （老缓存设备无这些字段→请「重新发现」补全）。
+        """
+        body: dict = {"feedId": int(feed_id), "updateAddress": False}
+        if house_id is not None and str(house_id) != "":
+            body["houseId"] = str(house_id)
+        if room_id is not None and str(room_id) != "":
+            body["roomId"] = int(room_id)
+        if device_id:
+            body["deviceId"] = str(device_id)
+        return body
+
+    async def get_device_details(self, feed_id, *, house_id=None, room_id=None,
+                                 device_id=None, **kw) -> dict:
         """设备可控流物模型（彩虹 jdsmart.device.getDeviceDetails）。
 
         实测响应：streams 在 `result.smartDetailInfo.streams`（含 is_enum/value_des/min/max/step/ptype）。
-        body【待最终确认】：按 feedId **字符串**选设备（避免大整数精度丢失——响应里 device.feed_id 数字位
-        576841753861489800 已丢精度，须用 device.feedid 字符串 576841753861489755）。
-        若你的抓包用别的键（如 deviceId），改这一行即可，签名/传输不变。
+        body 形态见 _device_details_body（复刻 App，缺 houseId/roomId 收不到物模型）。
         """
-        return await self.call("jdsmart.device.getDeviceDetails", {"feedId": str(feed_id)}, **kw)
+        body = self._device_details_body(feed_id, house_id, room_id, device_id)
+        return await self.call("jdsmart.device.getDeviceDetails", body, **kw)
 
     # ---- 高层便捷：直接拿拍平后的设备列表 ----
     async def fetch_devices(self, house_id, **kw) -> list[dict]:
@@ -421,6 +444,7 @@ def selftest() -> bool:
     fake_resp = {
         "code": "0",
         "result": {
+            "houseId": 1388207,
             "categoryList": [{"categoryName": "插座", "categoryId": 102010, "categoryDeviceCount": 1}],
             "roomList": [
                 {"roomName": "客厅", "roomId": 1, "deviceList": [
@@ -457,6 +481,26 @@ def selftest() -> bool:
           and cm.get("Mode", {}).get("options") == {"0": "自动", "1": "制冷"}
           and cm.get("Power", {}).get("controllable") is True
           and cm.get("Power", {}).get("options") == {"0": "关", "1": "开"})
+    check("house_id/room_id/hw_device_id 落进设备（供 getDeviceDetails body）",
+          d0.get("house_id") == 1388207 and d0.get("room_id") == 1
+          and d0.get("hw_device_id") == "AABBCCDDEEFF")
+
+    # 5) getDeviceDetails body 复刻 App（feedId 必须是数字、必带 houseId/roomId/updateAddress）
+    b = JdColorClient._device_details_body(563221780494556020, house_id="1388207",
+                                           room_id=3875794, device_id="EC0BAE3A8374")
+    check("body 键集合与 App 一致",
+          set(b) == {"feedId", "houseId", "roomId", "updateAddress", "deviceId"})
+    check("feedId 是 int（非字符串）+ 大整数不丢精度",
+          isinstance(b["feedId"], int) and b["feedId"] == 563221780494556020)
+    check("houseId 字符串 / roomId 数字 / updateAddress=False",
+          b["houseId"] == "1388207" and b["roomId"] == 3875794 and b["updateAddress"] is False)
+    # 紧凑序列化里 feedId 是裸数字（与抓包逐字节一致），不是带引号的字符串
+    check("序列化后 feedId 为裸数字",
+          '"feedId":563221780494556020' in _compact(b)
+          and '"feedId":"563221780494556020"' not in _compact(b))
+    b_min = JdColorClient._device_details_body("563221780494556020")
+    check("仅 feed_id（老缓存）：feedId 仍转 int，只剩 feedId+updateAddress",
+          b_min == {"feedId": 563221780494556020, "updateAddress": False})
 
     print("\ncolor_api self-test", "PASS" if ok else "FAIL")
     return ok

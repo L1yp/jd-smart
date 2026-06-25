@@ -82,7 +82,12 @@ class JdSmartCoordinator(DataUpdateCoordinator):
             source = "card_meta"
             if color_client is not None:
                 try:
-                    raw = await color_client.get_device_details(feed_id)
+                    raw = await color_client.get_device_details(
+                        feed_id,
+                        house_id=dev.get("house_id"),
+                        room_id=dev.get("room_id"),
+                        device_id=dev.get("hw_device_id"),
+                    )
                     model = parse_stream_model(raw)
                     if model:
                         source = "getDeviceDetails"
