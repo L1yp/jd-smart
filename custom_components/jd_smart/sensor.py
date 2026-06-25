@@ -37,6 +37,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import BINARY_STREAMS, DOMAIN
+from .control import control_map
 from .coordinator import JdSmartCoordinator
 
 # ── 原始值 → 物理单位的缩放（设备统一用“毫”单位：mV / mA / mW）──────────────
@@ -156,7 +157,10 @@ async def async_setup_entry(
             feed = dev["feed_id"]
             streams = snap.get("streams", {})
             ov = overrides_for(coordinator, feed)
+            cmap = control_map(coordinator, dev)
             for stream_id in streams:
+                if stream_id in cmap:
+                    continue  # 已是可控实体（switch/select/number），不再重复建只读 sensor
                 if is_binary_stream(dev, stream_id):
                     continue  # 开关量交给 binary_sensor 平台
                 if stream_id == POWER_STREAM:

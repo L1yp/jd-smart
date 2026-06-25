@@ -1,7 +1,7 @@
 """Constants for the JD Smart (小京鱼) integration."""
 
 DOMAIN = "jd_smart"
-PLATFORMS = ["sensor", "binary_sensor"]
+PLATFORMS = ["sensor", "binary_sensor", "switch", "select", "number"]
 # 这些 stream_id 是开关量(on/off)，用 binary_sensor 表示；其余作数值 sensor。
 # card_control 里的 on/off 二值枚举流会自动并入（见 binary_sensor），这里是静态兜底。
 BINARY_STREAMS = {"Power"}
@@ -70,10 +70,18 @@ COLOR_PROFILE_FIXED = {
     "partner": "xjgw-android",
 }
 
-# ── 旧 getDeviceSnapshot 接口 ──────────────────────────────────────────────
+# ── api.smart.jd.com 接口（同一套 HmacSHA1 签名，仅 path/body 不同）────────────
 API_BASE = "https://api.smart.jd.com"
 SNAPSHOT_PATH = "/c/service/integration/v1/getDeviceSnapshot_v1"
+CONTROL_PATH = "/c/service/integration/v1/controlDevice_v1"
+# 【待对齐抓包】getDeviceDetails 拉「可控流物模型」(is_enum/value_des/min/max/step)。
+# path/body 按 getDeviceSnapshot 同构推测；若你的抓包不同，改这里 + api.build_details_body 即可，签名不变。
+DETAILS_PATH = "/c/service/integration/v1/getDeviceDetails_v1"
 
 SERVICE_GET_SNAPSHOT = "get_device_snapshot"
+SERVICE_CONTROL_DEVICE = "control_device"
 ATTR_DEVICE_ID = "device_id"
 ATTR_FEED_ID = "feed_id"
+ATTR_STREAM_ID = "stream_id"   # 控制服务：单条流写值（与 ATTR_VALUE 搭配）
+ATTR_VALUE = "value"
+ATTR_COMMAND = "command"       # 控制服务：原始命令数组 [{stream_id,current_value},...]

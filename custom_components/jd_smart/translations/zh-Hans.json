@@ -129,6 +129,28 @@
           "description": "body 里用的设备 feed_id。"
         }
       }
+    },
+    "control_device": {
+      "name": "控制设备",
+      "description": "调用 controlDevice_v1 下发控制；返回执行后的最新 streams。",
+      "fields": {
+        "feed_id": {
+          "name": "feed_id",
+          "description": "目标设备 feed_id（已在集成里选过）。"
+        },
+        "stream_id": {
+          "name": "stream_id",
+          "description": "要控制的流 ID（单条写法，与 value 搭配）。"
+        },
+        "value": {
+          "name": "value",
+          "description": "写入码值（单条写法）。开关 0/1；多档枚举填档位码；数值流填数字。"
+        },
+        "command": {
+          "name": "command（多条）",
+          "description": "原始命令数组，一次写多条：[{stream_id, current_value}, ...]。"
+        }
+      }
     }
   }
 }

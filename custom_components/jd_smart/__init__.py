@@ -15,8 +15,11 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import JdSmartClient, JdSmartError, parse_snapshot
 from .const import (
+    ATTR_COMMAND,
     ATTR_DEVICE_ID,
     ATTR_FEED_ID,
+    ATTR_STREAM_ID,
+    ATTR_VALUE,
     CONF_ANDROID_ID,
     CONF_APP_VERSION,
     CONF_CHANNEL,
@@ -33,6 +36,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     PLATFORMS,
+    SERVICE_CONTROL_DEVICE,
     SERVICE_GET_SNAPSHOT,
 )
 from .coordinator import JdSmartCoordinator
@@ -110,6 +114,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = JdSmartCoordinator(hass, client, devices, scan, stream_overrides=overrides)
     if devices:
         await coordinator.async_config_entry_first_refresh()
+        # 拉各设备「可控流物模型」（getDeviceDetails），供 switch/select/number 建实体；
+        # 失败仅记日志、回退 card_meta，不阻断 setup。
+        await coordinator.async_fetch_models()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -128,7 +135,35 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id, None)
         if not hass.data[DOMAIN]:
             hass.services.async_remove(DOMAIN, SERVICE_GET_SNAPSHOT)
+            hass.services.async_remove(DOMAIN, SERVICE_CONTROL_DEVICE)
     return unloaded
+
+
+def _find_device_by_feed(hass: HomeAssistant, feed_id) -> tuple:
+    """按 feed_id 在所有配置条目里找 (coordinator, dev)。feed_id 按字符串比对（大整数/字符串都兼容）。"""
+    target = str(feed_id)
+    for coordinator in hass.data.get(DOMAIN, {}).values():
+        for dev in getattr(coordinator, "devices", []):
+            if str(dev.get("feed_id")) == target:
+                return coordinator, dev
+    return None, None
+
+
+def _build_commands(data: dict) -> list[dict]:
+    """控制服务两种入参：command 数组（原始）或 stream_id+value（单条）。"""
+    raw = data.get(ATTR_COMMAND)
+    if raw:
+        cmds = []
+        for c in raw:
+            sid = c.get("stream_id") if isinstance(c, dict) else None
+            if sid is None or "current_value" not in c:
+                raise HomeAssistantError("command 每项需含 stream_id 和 current_value")
+            cmds.append({"stream_id": sid, "current_value": c["current_value"]})
+        return cmds
+    sid = data.get(ATTR_STREAM_ID)
+    if sid is not None and ATTR_VALUE in data:
+        return [{"stream_id": sid, "current_value": data[ATTR_VALUE]}]
+    raise HomeAssistantError("请提供 stream_id+value，或 command 数组")
 
 
 def _async_register_services(hass: HomeAssistant) -> None:
@@ -166,4 +201,37 @@ def _async_register_services(hass: HomeAssistant) -> None:
             }
         ),
         supports_response=SupportsResponse.ONLY,
+    )
+
+    async def _handle_control_device(call: ServiceCall) -> dict:
+        feed_id = call.data[ATTR_FEED_ID]
+        coordinator, dev = _find_device_by_feed(hass, feed_id)
+        if dev is None:
+            raise HomeAssistantError(f"未找到 feed_id={feed_id} 的设备（先在集成里选好设备）")
+        commands = _build_commands(call.data)
+        try:
+            parsed = await coordinator.async_control(dev, commands)
+        except JdSmartError as err:
+            raise HomeAssistantError(f"控制失败: {err}") from err
+        return {
+            "feed_id": feed_id,
+            "ok": parsed["ok"],
+            "control_ret": parsed.get("control_ret"),
+            "streams": parsed["streams"],
+            "result": parsed.get("raw"),
+        }
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CONTROL_DEVICE,
+        _handle_control_device,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_FEED_ID): cv.string,
+                vol.Optional(ATTR_STREAM_ID): cv.string,
+                vol.Optional(ATTR_VALUE): vol.Any(int, float, str),
+                vol.Optional(ATTR_COMMAND): [dict],
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
     )

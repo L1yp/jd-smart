@@ -129,6 +129,28 @@
           "description": "Device feed_id used in the body."
         }
       }
+    },
+    "control_device": {
+      "name": "Control device",
+      "description": "Call controlDevice_v1 to send commands; returns the updated streams.",
+      "fields": {
+        "feed_id": {
+          "name": "feed_id",
+          "description": "Target device feed_id (already selected in the integration)."
+        },
+        "stream_id": {
+          "name": "stream_id",
+          "description": "Stream id to control (single-write form, paired with value)."
+        },
+        "value": {
+          "name": "value",
+          "description": "Code to write (single-write form). Switch 0/1; enum step code; number for numeric streams."
+        },
+        "command": {
+          "name": "command (batch)",
+          "description": "Raw command array to write multiple streams at once: [{stream_id, current_value}, ...]."
+        }
+      }
     }
   }
 }
