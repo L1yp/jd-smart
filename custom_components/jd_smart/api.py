@@ -124,9 +124,11 @@ def _details_streams(raw) -> list:
 
 
 def parse_stream_model(raw) -> dict:
-    """getDeviceDetails → {stream_id: {name,ptype,is_enum,options,min,max,step,unit,current}}。
+    """getDeviceDetails → {stream_id: {name,ptype,is_enum,options,min,max,step,unit,current,stream_type}}。
 
     设备「可控流物模型」的权威来源（比 card_meta 完整）。options 由 value_des 解析。
+    **stream_type 是可控性的权威标志**（实证 jd_smart_traffic.db）：0=可控、1=只读传感器
+    （如 Voltage/Electric，即便带 min/max 也不可写）；缺省(None)表示该来源未给（card_meta 降级）。
     """
     model: dict = {}
     for s in _details_streams(raw):
@@ -145,17 +147,25 @@ def parse_stream_model(raw) -> dict:
             "step": _num(s.get("step")),
             "unit": s.get("units") or None,
             "current": s.get("current_value"),
+            "stream_type": s.get("stream_type"),  # 0=可控 / 1=只读；None=未知
         }
     return model
 
 
 def control_kind(m: dict) -> str | None:
-    """按物模型把一条流归类成可控实体类型：'switch'|'select'|'number'；None=不作可控实体。
+    """按物模型把一条流归类成可控实体类型：'switch'|'select'|'number'；None=只读，不建可控实体。
 
-    - 枚举且恰好 {0,1} 两档 → switch（on/off）
-    - 其它多档枚举 → select（按 value_des 标签；码值可非连续，如 Mode 0/4）
-    - 非枚举数值（is_enum=-1 或 ptype int/float）且有 min/max → number
+    可控性以 **stream_type** 为准（getDeviceDetails 实证）：
+    - stream_type==1 → 只读传感器，恒 None（即便有 min/max，如 Voltage/Electric，不误判成可写 number）；
+    - stream_type==0 → 可控，再按形状细分控件类型；形状不足时 number 兜底（自由写入）；
+    - stream_type 缺省(None，card_meta 降级或老响应) → 退回按形状判定（options/min-max），保持原行为。
+
+    控件细分：{0,1} 两档枚举→switch；其它多档枚举→select（码值可非连续，如 Mode 0/4）；
+    非枚举数值（is_enum=-1 或 ptype 数值）带 min/max→number。
     """
+    st = m.get("stream_type")
+    if st == 1:
+        return None  # 只读传感器：绝不建可控实体
     opts = m.get("options")
     if opts:
         if len(opts) == 2 and set(opts) <= {"0", "1"}:
@@ -164,6 +174,8 @@ def control_kind(m: dict) -> str | None:
     if m.get("min") is not None and m.get("max") is not None:
         if m.get("is_enum") == -1 or m.get("ptype") in ("int", "float", "double", "number"):
             return "number"
+    if st == 0:
+        return "number"  # 明确可控但缺枚举/范围信息 → 数值自由写入兜底
     return None
 
 
@@ -186,6 +198,7 @@ def model_from_card_meta(dev: dict) -> dict:
             "step": None,
             "unit": cm.get("unit") or None,
             "current": None,
+            "stream_type": 0,  # card_meta 只收 controllable 流，故均可控
         }
     return model
 
@@ -414,6 +427,28 @@ def selftest() -> bool:
     check("number 范围/步长解析", model["TimingSetHour"]["max"] == 24
           and model["TimingSetHour"]["step"] == 1)
     check("名称取 stream_name", model["Mode"]["name"] == "模式")
+
+    # 3b) stream_type 权威可控标志（真实插座 getDeviceDetails，实证自 jd_smart_traffic.db）
+    socket = [
+        {"stream_id": "Power", "is_enum": 1, "value_des": '[{"0":"关"},{"1":"开"}]',
+         "min_value": 0, "max_value": 1, "ptype": "int", "stream_type": 0},
+        {"stream_id": "Voltage", "is_enum": -1, "value_des": "", "min_value": 0,
+         "max_value": 240, "ptype": "float", "units": "伏", "stream_type": 1},
+        {"stream_id": "Electric", "is_enum": -1, "value_des": "", "min_value": 0,
+         "max_value": 20, "ptype": "float", "units": "安", "stream_type": 1},
+        {"stream_id": "CurrentPowerSum", "is_enum": -1, "value_des": "", "min_value": 0,
+         "max_value": 65535, "ptype": "int", "stream_type": 1},
+    ]
+    sm = parse_stream_model({"result": {"smartDetailInfo": {"streams": socket}}})
+    check("stream_type 已解析", sm["Power"]["stream_type"] == 0 and sm["Voltage"]["stream_type"] == 1)
+    check("Power(type0,枚举) → switch", control_kind(sm["Power"]) == "switch")
+    check("Voltage(type1,有 min/max) → None（只读，不误判 number）", control_kind(sm["Voltage"]) is None)
+    check("Electric(type1) → None", control_kind(sm["Electric"]) is None)
+    check("CurrentPowerSum(type1) → None", control_kind(sm["CurrentPowerSum"]) is None)
+    check("type0 但无枚举/范围 → number 兜底",
+          control_kind({"stream_type": 0, "options": None, "min": None, "max": None}) == "number")
+    check("type0 多档枚举（value_des 空，options 由 card_desc 补）→ select",
+          control_kind({"stream_type": 0, "options": {"0": "标准模式", "4": "婴儿风"}}) == "select")
 
     # 4) card_meta 降级物模型（缺 min/max → 只出 switch/select）
     dev = {"card_meta": {

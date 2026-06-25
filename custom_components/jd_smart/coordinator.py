@@ -30,6 +30,22 @@ def _snippet(obj, limit: int = 400) -> str:
     return s[:limit] + ("…" if len(s) > limit else "")
 
 
+def _enrich_options_from_card_meta(model: dict, dev: dict) -> None:
+    """getDeviceDetails 缺 value_des 时，用 card_desc/card_meta 的枚举标签补 options/单位。
+
+    getDeviceDetails 给权威可控性(stream_type)+范围，但个别可控枚举流 value_des 为空；枚举的
+    中文档位散在 getAllDevices 的 card_desc（已复合进 dev['card_meta']），补进来 type0 枚举才能成 select
+    而非退化成裸 number。仅补缺失项，不覆盖 getDeviceDetails 已有的值。
+    """
+    cmeta = dev.get("card_meta") or {}
+    for sid, entry in model.items():
+        cm = cmeta.get(sid) or {}
+        if not entry.get("options") and cm.get("options"):
+            entry["options"] = cm["options"]
+        if not entry.get("unit") and cm.get("unit"):
+            entry["unit"] = cm["unit"]
+
+
 class JdSmartCoordinator(DataUpdateCoordinator):
     """data: { feed_id: snapshot_dict | None }"""
 
@@ -91,6 +107,7 @@ class JdSmartCoordinator(DataUpdateCoordinator):
                     model = parse_stream_model(raw)
                     if model:
                         source = "getDeviceDetails"
+                        _enrich_options_from_card_meta(model, dev)
                     else:
                         # 关键盲点：接口有响应但解析不出 streams（路径不符/空/错误载荷）。
                         # 以前这里静默回退 card_meta，"只有 Power"无从排查——打出原始片段。
