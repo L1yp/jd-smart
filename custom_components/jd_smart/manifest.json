@@ -1,12 +1,12 @@
 {
   "domain": "jd_smart",
   "name": "JD Smart 小京鱼",
-  "version": "0.2.0",
-  "documentation": "https://github.com/yourname/jd_smart",
-  "issue_tracker": "https://github.com/yourname/jd_smart/issues",
-  "codeowners": [],
-  "iot_class": "cloud_polling",
-  "integration_type": "hub",
+  "codeowners": ["@L1yp"],
   "config_flow": true,
-  "requirements": ["pycryptodome>=3.20", "asn1crypto>=1.5"]
+  "documentation": "https://github.com/L1yp/jd-smart",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/L1yp/jd-smart/issues",
+  "requirements": ["pycryptodome>=3.20", "asn1crypto>=1.5"],
+  "version": "0.2.0"
 }
