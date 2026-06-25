@@ -23,6 +23,7 @@ from .const import (
     CONF_ANDROID_ID,
     CONF_APP_VERSION,
     CONF_CHANNEL,
+    CONF_COLOR_SIGN_SECRET,
     CONF_DEVICE_ID_OVERRIDE,
     CONF_DEVICES,
     CONF_HARD_PLATFORM,
@@ -105,6 +106,30 @@ def _client_from_entry(hass: HomeAssistant, entry: ConfigEntry) -> JdSmartClient
     )
 
 
+async def _async_fetch_models(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """用彩虹客户端拉各设备物模型（jdsmart.device.getDeviceDetails）。
+
+    复用 config_flow 的彩虹客户端构建 + eid 解析；任何一步失败都静默跳过，
+    实体退回 card_meta 派生（不阻断 setup）。物模型只在此拉一次（静态元数据）。
+    """
+    # 局部导入：避免 __init__ 顶层依赖 config_flow（HA 加载顺序更稳）
+    from .config_flow import _async_resolve_eid, _build_color_client
+
+    cfg = _merged(entry)
+    if not cfg.get(CONF_COLOR_SIGN_SECRET) or not cfg.get(CONF_ANDROID_ID):
+        return  # 旧条目没填彩虹凭据：跳过
+    try:
+        eid, err = await _async_resolve_eid(hass, cfg)
+        if err or not eid:
+            _LOGGER.debug("物模型抓取跳过：eid 解析失败 %s", err)
+            return
+        color_client = _build_color_client(hass, cfg, eid)
+    except Exception as err:  # noqa: BLE001  发现链路任何异常都不应拖垮 setup
+        _LOGGER.debug("物模型抓取跳过：彩虹客户端构建失败 %s", err)
+        return
+    await coordinator.async_fetch_models(color_client)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = _client_from_entry(hass, entry)
     devices = _load_devices(entry)
@@ -114,9 +139,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = JdSmartCoordinator(hass, client, devices, scan, stream_overrides=overrides)
     if devices:
         await coordinator.async_config_entry_first_refresh()
-        # 拉各设备「可控流物模型」（getDeviceDetails），供 switch/select/number 建实体；
+        # 拉各设备「可控流物模型」（彩虹 getDeviceDetails），供 switch/select/number 建实体；
         # 失败仅记日志、回退 card_meta，不阻断 setup。
-        await coordinator.async_fetch_models()
+        await _async_fetch_models(hass, entry, coordinator)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

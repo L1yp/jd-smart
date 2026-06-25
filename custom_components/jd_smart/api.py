@@ -19,9 +19,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 try:
-    from .const import API_BASE, CONTROL_PATH, DETAILS_PATH, SNAPSHOT_PATH  # 包内（HA 运行时）
-except ImportError:                                                          # 直接 `python api.py` 跑自检
-    from const import API_BASE, CONTROL_PATH, DETAILS_PATH, SNAPSHOT_PATH    # 脚本目录已在 sys.path
+    from .const import API_BASE, CONTROL_PATH, SNAPSHOT_PATH  # 包内（HA 运行时）
+except ImportError:                                            # 直接 `python api.py` 跑自检
+    from const import API_BASE, CONTROL_PATH, SNAPSHOT_PATH    # 脚本目录已在 sys.path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,8 +99,8 @@ def parse_value_des(value_des) -> dict | None:
 def _details_streams(raw) -> list:
     """从 getDeviceDetails 响应里取 streams 列表。
 
-    响应外壳结构待与抓包对齐：兼容 result 为 JSON 字符串/对象、streams 在 result.streams/streamList/data
-    或直接是顶层数组。取不到就返回 []（让上层回退 card_meta）。
+    彩虹 `jdsmart.device.getDeviceDetails` 实测：streams 在 `result.smartDetailInfo.streams`。
+    其余位置（result.streams/streamList/data、顶层数组）一并兼容兜底；取不到返回 []（上层回退 card_meta）。
     """
     if isinstance(raw, list):
         return raw
@@ -113,6 +113,9 @@ def _details_streams(raw) -> list:
         except ValueError:
             return []
     if isinstance(res, dict):
+        sdi = res.get("smartDetailInfo")
+        if isinstance(sdi, dict) and isinstance(sdi.get("streams"), list):
+            return sdi["streams"]
         streams = res.get("streams") or res.get("streamList") or res.get("data")
         return streams if isinstance(streams, list) else []
     if isinstance(res, list):
@@ -237,19 +240,6 @@ class JdSmartClient:
         )
 
     @staticmethod
-    def build_details_body(feed_id) -> str:
-        """getDeviceDetails_v1 的 body。
-
-        【待对齐抓包】按 getDeviceSnapshot 同构推测（json 为对象、去掉 digest）；
-        若你的 getDeviceDetails 抓包不同，把这里改成抓包里的真实 body 即可（签名逻辑不变）。
-        """
-        return json.dumps(
-            {"json": {"feed_id": int(feed_id), "version": "2.0"}},
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-
-    @staticmethod
     def _coerce_value(v):
         """current_value 归一：bool/数字按数字；纯数字字符串转数字；其余原样（匹配 App 裸数字形态）。"""
         if isinstance(v, bool):
@@ -357,9 +347,8 @@ class JdSmartClient:
     async def get_device_snapshot(self, device_id: str, feed_id) -> dict:
         return await self._post(SNAPSHOT_PATH, device_id, self.build_body(feed_id))
 
-    async def get_device_details(self, device_id: str, feed_id) -> dict:
-        """拉设备可控流物模型（getDeviceDetails_v1）。请求形态见 build_details_body 的【待对齐】注释。"""
-        return await self._post(DETAILS_PATH, device_id, self.build_details_body(feed_id))
+    # 注：设备物模型(getDeviceDetails)是**彩虹网关** functionId jdsmart.device.getDeviceDetails，
+    # 不在本(smart api)客户端，见 color_api.JdColorClient.get_device_details。
 
     async def control_device(self, device_id: str, feed_id, commands) -> dict:
         """下发控制。commands=[{stream_id,current_value},...]。
@@ -414,7 +403,9 @@ def selftest() -> bool:
         {"stream_id": "TimingSetHour", "stream_name": "定时设置时", "is_enum": -1,
          "value_des": "", "ptype": "int", "min_value": 0, "max_value": 24, "step": "1"},
     ]
-    model = parse_stream_model({"result": {"streams": streams}})
+    # 实测响应里 streams 在 result.smartDetailInfo.streams（彩虹 jdsmart.device.getDeviceDetails）
+    model = parse_stream_model({"code": "0", "result": {"smartDetailInfo": {"streams": streams}}})
+    check("从 result.smartDetailInfo.streams 取流", set(model) >= {"Horizontal", "Mode", "Wind", "TimingSetHour"})
     check("value_des 解析枚举", model["Horizontal"]["options"] == {"0": "关", "1": "开"})
     check("Horizontal(0/1 两档) → switch", control_kind(model["Horizontal"]) == "switch")
     check("Mode(0/4 两档非 0/1) → select", control_kind(model["Mode"]) == "select")

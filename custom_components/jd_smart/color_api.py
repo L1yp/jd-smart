@@ -334,6 +334,16 @@ class JdColorClient:
         # 注意：getAllDevices 的 houseId 是字符串（与 getHouseDetails 的数字不同）
         return await self.call("jdsmart.house.getAllDevices", {"houseId": str(house_id)}, **kw)
 
+    async def get_device_details(self, feed_id, **kw) -> dict:
+        """设备可控流物模型（彩虹 jdsmart.device.getDeviceDetails）。
+
+        实测响应：streams 在 `result.smartDetailInfo.streams`（含 is_enum/value_des/min/max/step/ptype）。
+        body【待最终确认】：按 feedId **字符串**选设备（避免大整数精度丢失——响应里 device.feed_id 数字位
+        576841753861489800 已丢精度，须用 device.feedid 字符串 576841753861489755）。
+        若你的抓包用别的键（如 deviceId），改这一行即可，签名/传输不变。
+        """
+        return await self.call("jdsmart.device.getDeviceDetails", {"feedId": str(feed_id)}, **kw)
+
     # ---- 高层便捷：直接拿拍平后的设备列表 ----
     async def fetch_devices(self, house_id, **kw) -> list[dict]:
         resp = await self.get_all_devices(house_id, **kw)

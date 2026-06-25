@@ -56,21 +56,24 @@ class JdSmartCoordinator(DataUpdateCoordinator):
                 result[feed_id] = None
         return result
 
-    async def async_fetch_models(self) -> None:
-        """每台设备拉一次 getDeviceDetails 物模型；失败/为空回退 card_meta。setup 阶段调用一次。
+    async def async_fetch_models(self, color_client=None) -> None:
+        """每台设备拉一次物模型；失败/为空/无彩虹客户端则回退 card_meta。setup 阶段调用一次。
 
-        物模型是静态元数据（哪些流可控、枚举档位、数值范围），不随状态变，故只在 setup 拉一次，
-        实时值仍走 _async_update_data 的快照轮询。
+        物模型走**彩虹** getDeviceDetails（jdsmart.device.getDeviceDetails），是静态元数据
+        （哪些流可控、枚举档位、数值范围），不随状态变，故只在 setup 拉一次；实时值仍走快照轮询。
         """
+        from .color_api import JdColorError  # 局部导入：仅 setup 用到彩虹客户端
+
         for dev in self.devices:
             feed_id = dev["feed_id"]
             model: dict = {}
-            try:
-                raw = await self.client.get_device_details(dev["device_id"], feed_id)
-                model = parse_stream_model(raw)
-            except JdSmartError as err:
-                _LOGGER.warning("拉取设备 %s 物模型失败，回退 card_meta: %s",
-                                dev.get("name", feed_id), err)
+            if color_client is not None:
+                try:
+                    raw = await color_client.get_device_details(feed_id)
+                    model = parse_stream_model(raw)
+                except JdColorError as err:
+                    _LOGGER.warning("拉取设备 %s 物模型失败，回退 card_meta: %s",
+                                    dev.get("name", feed_id), err)
             if not model:
                 model = model_from_card_meta(dev)
             if model:

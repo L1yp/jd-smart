@@ -74,9 +74,8 @@ COLOR_PROFILE_FIXED = {
 API_BASE = "https://api.smart.jd.com"
 SNAPSHOT_PATH = "/c/service/integration/v1/getDeviceSnapshot_v1"
 CONTROL_PATH = "/c/service/integration/v1/controlDevice_v1"
-# 【待对齐抓包】getDeviceDetails 拉「可控流物模型」(is_enum/value_des/min/max/step)。
-# path/body 按 getDeviceSnapshot 同构推测；若你的抓包不同，改这里 + api.build_details_body 即可，签名不变。
-DETAILS_PATH = "/c/service/integration/v1/getDeviceDetails_v1"
+# 注：设备物模型走**彩虹网关** functionId jdsmart.device.getDeviceDetails（api.m.jd.com，
+# 彩虹 HMAC-SHA256），不在本组 smart-api path 里，见 color_api.JdColorClient.get_device_details。
 
 SERVICE_GET_SNAPSHOT = "get_device_snapshot"
 SERVICE_CONTROL_DEVICE = "control_device"
