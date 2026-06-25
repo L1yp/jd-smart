@@ -201,7 +201,11 @@ def _async_register_services(hass: HomeAssistant) -> None:
         store = hass.data.get(DOMAIN, {})
         if not store:
             raise HomeAssistantError("jd_smart 尚未配置")
-        coordinator: JdSmartCoordinator = next(iter(store.values()))
+        # 多账号：优先用拥有该 feed_id 的账号客户端（tgt/签名才匹配）；
+        # 没选过的设备退回任一账号兜底。
+        coordinator, _dev = _find_device_by_feed(hass, feed_id)
+        if coordinator is None:
+            coordinator = next(iter(store.values()))
         try:
             data = await coordinator.client.get_device_snapshot(device_id, feed_id)
         except JdSmartError as err:

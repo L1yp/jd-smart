@@ -2,34 +2,13 @@
   "config": {
     "step": {
       "user": {
-        "title": "JD Smart (小京鱼) — Credentials",
-        "description": "Rainbow gateway (color_*) discovers devices; seg1/key drive snapshot polling; tgt is the shared login ticket and expires.",
+        "title": "JD Smart (小京鱼) — Account credentials",
+        "description": "Each JD account needs only these 4 fields (captured from the app): tgt login ticket (expires), jmafinger and pin from the cookie, android_id to derive the device identity. All other app/device params use defaults — tweak them later under Options → Advanced.\n\nThe same phone can hold multiple accounts; they are distinguished by pin.",
         "data": {
-          "color_sign_secret": "color_sign_secret (rainbow HMAC key)",
-          "color_pin": "color_pin (cookie pin)",
+          "tgt": "tgt (login ticket, expires)",
           "color_jmafinger": "color_jmafinger (cookie UUID)",
-          "tgt": "tgt (login ticket)",
-          "seg1": "seg1 (constant id)",
-          "key": "HmacSHA1 key",
-          "hard_platform": "hard_platform (model)",
-          "app_version": "app_version",
-          "plat_version": "plat_version",
-          "channel": "channel",
-          "plat": "plat"
-        }
-      },
-      "device": {
-        "title": "Device profile & eid",
-        "description": "android_id automatically derives aid/uuid/device_id. Leave eid empty to auto-mint it via ds.json (cached to disk by android_id).",
-        "data": {
-          "android_id": "android_id (Settings.Secure.ANDROID_ID, 16hex)",
-          "d_brand": "Brand",
-          "d_model": "Model",
-          "os_version": "OS version (SDK_INT)",
-          "screen": "Screen (e.g. 1080*2160)",
-          "area": "LBS area code",
-          "network_type": "Network type",
-          "eid": "eid (optional; empty = auto-fetch)"
+          "color_pin": "color_pin (cookie pin, account id)",
+          "android_id": "android_id (Settings.Secure.ANDROID_ID, 16hex)"
         }
       },
       "houses": {
@@ -47,7 +26,7 @@
       "eid_fetch_failed": "Failed to fetch eid: {detail}. Enter an eid manually, or check android_id/network."
     },
     "abort": {
-      "already_configured": "This device is already configured",
+      "already_configured": "This JD account (pin) is already configured. Don't add the same account twice; use a different pin for another account.",
       "cannot_connect": "Discovery failed (network / risk control / credentials). Check tgt and retry.",
       "no_houses": "No homes returned for this account.",
       "no_devices": "No devices found in the selected homes."
@@ -58,14 +37,25 @@
       "init": {
         "title": "JD Smart options",
         "menu_options": {
-          "settings": "Credentials & device info",
+          "credentials": "Update credentials (tgt/jmafinger/pin/android_id)",
           "rediscover": "Re-discover devices",
           "streams": "Edit sensors / units",
+          "settings": "Advanced (all parameters)",
           "manual": "Manual device entry"
         }
       },
+      "credentials": {
+        "title": "Update credentials",
+        "description": "Update just these 4 fields (tgt expires most often): tgt login ticket, jmafinger/pin (cookie), android_id. Everything else stays unchanged; to edit seg1/key/model/eid/interval use Advanced. After updating, run Re-discover if your devices changed.",
+        "data": {
+          "tgt": "tgt (login ticket, expires)",
+          "color_jmafinger": "color_jmafinger (cookie UUID)",
+          "color_pin": "color_pin (cookie pin, account id)",
+          "android_id": "android_id (16hex)"
+        }
+      },
       "settings": {
-        "title": "Credentials & device info",
+        "title": "Advanced (all parameters)",
         "description": "Rainbow color_* discovers devices; seg1/key poll snapshots; android_id derives aid/device_id; leave eid empty to auto-fetch. Upgrading from the old version: fill the color_* / android_id fields here, then run Re-discover.",
         "data": {
           "color_sign_secret": "color_sign_secret (rainbow HMAC key)",

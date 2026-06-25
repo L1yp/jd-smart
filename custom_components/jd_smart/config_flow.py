@@ -1,16 +1,18 @@
 """Config & options flow for JD Smart（彩虹自动发现版）。
 
-ConfigFlow（首次安装）:
-    user    凭据（彩虹 color_* + 旧接口 seg1/key + 共用 tgt）
-    device  设备档（android_id 必填、机型描述、eid 可选）；提交时解析 eid（填了用填的，
-            否则查磁盘缓存，再否则 ds.json 现铸并缓存）
+ConfigFlow（首次安装，支持多账号）:
+    user    账号 4 必填项（tgt / jmafinger / color_pin / android_id）；其余 App/设备级
+            常量用默认值自动补。提交时以 color_pin 作 unique_id（同一台手机可加多个京东
+            账号；重复账号会中止），并解析 eid（填了用填的，否则查磁盘缓存，再否则
+            ds.json 现铸并缓存）
     houses  彩虹 getHouses → 多选家庭
     devices 选中家庭 getAllDevices → 多选设备 → 缓存进 entry.options → 建条目
 
 OptionsFlow（菜单）:
-    creds       更新 tgt / 轮询间隔 / device_id 覆盖
+    credentials 只更新这 4 项（tgt 会过期，最常用）
     rediscover  重新发现家庭→设备并更新缓存
     streams     选设备 → 逐流改 名称/单位/启用（card_meta 预填）
+    settings    高级：全部参数（seg1/key/机型/eid/间隔…；旧条目补齐也在此）
     manual      兜底：手填 名称|feed_id（device_id 自动 md5(android_id)）
 """
 from __future__ import annotations
@@ -72,36 +74,47 @@ from .const import (
 from .device_finger import EidFetchError, async_fetch_eid
 from .eid_cache import async_get_cached_eid, async_save_eid
 
-# ── 凭据表单（步 user）─────────────────────────────────────────────────────
-ACCOUNT_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_COLOR_SIGN_SECRET, default=DEFAULT_COLOR_SIGN_SECRET): str,
-        vol.Required(CONF_COLOR_PIN): str,
-        vol.Required(CONF_COLOR_JMAFINGER): str,
-        vol.Required(CONF_TGT): str,
-        vol.Required(CONF_SEG1, default=DEFAULT_SEG1): str,
-        vol.Required(CONF_KEY, default=DEFAULT_KEY): str,
-        vol.Required(CONF_HARD_PLATFORM, default=DEFAULT_HARD_PLATFORM): str,
-        vol.Required(CONF_APP_VERSION, default=DEFAULT_APP_VERSION): str,
-        vol.Required(CONF_PLAT_VERSION, default=DEFAULT_PLAT_VERSION): str,
-        vol.Required(CONF_CHANNEL, default=DEFAULT_CHANNEL): str,
-        vol.Required(CONF_PLAT, default=DEFAULT_PLAT): str,
-    }
-)
+# ── 账号必填 4 项（步 user / 选项 credentials）──────────────────────────────
+# 每个账号不同的就这 4 项；其余 seg1/key/color_sign_secret/机型/设备档 都是 App/设备级
+# 常量，对所有账号一致，用默认值自动补（高级设置里仍可改）。这样首次安装只填 4 项。
+ADVANCED_DEFAULTS = {
+    CONF_COLOR_SIGN_SECRET: DEFAULT_COLOR_SIGN_SECRET,
+    CONF_SEG1: DEFAULT_SEG1,
+    CONF_KEY: DEFAULT_KEY,
+    CONF_HARD_PLATFORM: DEFAULT_HARD_PLATFORM,
+    CONF_APP_VERSION: DEFAULT_APP_VERSION,
+    CONF_PLAT_VERSION: DEFAULT_PLAT_VERSION,
+    CONF_CHANNEL: DEFAULT_CHANNEL,
+    CONF_PLAT: DEFAULT_PLAT,
+    CONF_D_BRAND: DEFAULT_D_BRAND,
+    CONF_D_MODEL: DEFAULT_D_MODEL,
+    CONF_OS_VERSION: DEFAULT_OS_VERSION,
+    CONF_SCREEN: DEFAULT_SCREEN,
+    CONF_AREA: DEFAULT_AREA,
+    CONF_NETWORK_TYPE: DEFAULT_NETWORK_TYPE,
+}
 
 
-def _device_schema(d: dict) -> vol.Schema:
-    """步 device 表单；默认值取已填值或示例常量。"""
+def _with_defaults(data: dict) -> dict:
+    """把 4 必填项之外的 App/设备级常量用默认值补齐（仅补缺失/空值），返回新 dict。
+    下游 _build_color_client / JdSmartClient 仍能拿到完整字段，无需在表单里手抄常量。"""
+    out = dict(data)
+    for k, dv in ADVANCED_DEFAULTS.items():
+        if not out.get(k):
+            out[k] = dv
+    return out
+
+
+def _credentials_schema(cfg: dict | None = None) -> vol.Schema:
+    """账号 4 必填项表单（首次安装步 user / 选项 credentials 共用）。
+    顺序按用户习惯：tgt → jmafinger → color_pin → android_id。"""
+    cfg = cfg or {}
     return vol.Schema(
         {
-            vol.Required(CONF_ANDROID_ID, default=d.get(CONF_ANDROID_ID, "")): str,
-            vol.Required(CONF_D_BRAND, default=d.get(CONF_D_BRAND, DEFAULT_D_BRAND)): str,
-            vol.Required(CONF_D_MODEL, default=d.get(CONF_D_MODEL, DEFAULT_D_MODEL)): str,
-            vol.Required(CONF_OS_VERSION, default=d.get(CONF_OS_VERSION, DEFAULT_OS_VERSION)): str,
-            vol.Required(CONF_SCREEN, default=d.get(CONF_SCREEN, DEFAULT_SCREEN)): str,
-            vol.Required(CONF_AREA, default=d.get(CONF_AREA, DEFAULT_AREA)): str,
-            vol.Required(CONF_NETWORK_TYPE, default=d.get(CONF_NETWORK_TYPE, DEFAULT_NETWORK_TYPE)): str,
-            vol.Optional(CONF_EID, default=d.get(CONF_EID, "")): str,
+            vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
+            vol.Required(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
+            vol.Required(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
+            vol.Required(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
         }
     )
 
@@ -343,7 +356,7 @@ def _parse_manual_devices(text: str | None, device_id: str) -> list[dict]:
 
 # ── ConfigFlow ─────────────────────────────────────────────────────────────
 class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """首次安装：凭据 → 设备(eid) → 选家庭 → 选设备。"""
+    """首次安装：账号 4 项 → 选家庭 → 选设备。支持多账号（unique_id = color_pin）。"""
 
     VERSION = 1
 
@@ -356,19 +369,13 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_device()
-        return self.async_show_form(step_id="user", data_schema=ACCOUNT_SCHEMA)
-
-    async def async_step_device(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.ConfigFlowResult:
         errors: dict[str, str] = {}
         placeholders = {"detail": ""}
         if user_input is not None:
-            self._data.update(user_input)
-            await self.async_set_unique_id(self._data[CONF_ANDROID_ID])
+            self._data = _with_defaults(user_input)  # 4 必填项 + 自动补齐常量默认值
+            # 多账号：以 color_pin 作 unique_id —— 同一台手机可加多个京东账号，
+            # 重复账号（同 pin）会在此中止（already_configured）。
+            await self.async_set_unique_id(self._data[CONF_COLOR_PIN])
             self._abort_if_unique_id_configured()
             eid, err = await _async_resolve_eid(self.hass, self._data)
             if err:
@@ -378,8 +385,8 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_EID] = eid
                 return await self.async_step_houses()
         return self.async_show_form(
-            step_id="device",
-            data_schema=_device_schema(self._data),
+            step_id="user",
+            data_schema=_credentials_schema(self._data),
             errors=errors,
             description_placeholders=placeholders,
         )
@@ -427,9 +434,9 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_HOUSES: houses,
                 CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
             }
-            return self.async_create_entry(
-                title="小京鱼 JD Smart", data=self._data, options=options
-            )
+            # 标题带上 pin，便于在集成页区分多个账号
+            title = f"小京鱼 {self._data.get(CONF_COLOR_PIN)}".strip()
+            return self.async_create_entry(title=title, data=self._data, options=options)
         default = [str(d["feed_id"]) for d in self._all_devices]
         return self.async_show_form(
             step_id="devices", data_schema=_devices_select(self._all_devices, default)
@@ -465,7 +472,19 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.ConfigFlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["settings", "rediscover", "streams", "manual"],
+            menu_options=["credentials", "rediscover", "streams", "settings", "manual"],
+        )
+
+    # --- 只更新账号 4 项（tgt 会过期，最常用）---
+    async def async_step_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        if user_input is not None:
+            self._eid = None  # android_id/tgt 可能变了，下次发现时重新解析 eid
+            return self.async_create_entry(title="", data=self._merged_options(**user_input))
+        cfg = merged_config(self._entry)
+        return self.async_show_form(
+            step_id="credentials", data_schema=_credentials_schema(cfg)
         )
 
     # --- 凭据与设备信息（一站式编辑；旧条目在此补齐 color 凭据/android_id/eid）---
