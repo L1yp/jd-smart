@@ -141,6 +141,16 @@
           "description": "Raw command array to write multiple streams at once: [{stream_id, current_value}, ...]."
         }
       }
+    },
+    "get_device_model": {
+      "name": "Query device model (diagnostic)",
+      "description": "Fetch the device's rainbow getDeviceDetails model; returns raw response + parsed model + control routing. Use it to debug 'why only a Power switch' — a control_map missing Mode/Wind/oscillation means getDeviceDetails returned no model at runtime and it silently fell back to card_meta (whose card_control only marks Power controllable).",
+      "fields": {
+        "feed_id": {
+          "name": "feed_id",
+          "description": "Target device feed_id (already selected in the integration)."
+        }
+      }
     }
   }
 }

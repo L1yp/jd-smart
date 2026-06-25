@@ -49,3 +49,15 @@ control_device:
       example: '[{"stream_id": "Power", "current_value": 1}]'
       selector:
         object:
+
+get_device_model:
+  name: 查询设备物模型（诊断）
+  description: 拉取该设备的彩虹 getDeviceDetails 物模型，返回原始响应 + 解析结果 + 可控归类。用于排查「为什么只生成了 Power 开关」——若 control_map 缺 Mode/Wind/摆头 等，说明运行时 getDeviceDetails 没返回物模型、静默回退了 card_meta（card_control 只标 Power 可控）。
+  fields:
+    feed_id:
+      name: feed_id
+      description: 目标设备 feed_id（已在集成里选过的设备）。例如电风扇的 feed_id。
+      required: true
+      example: "576841753861489755"
+      selector:
+        text:

@@ -1,6 +1,7 @@
 """DataUpdateCoordinator：按间隔轮询已配置设备的快照。"""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
 
@@ -10,6 +11,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .api import (
     JdSmartClient,
     JdSmartError,
+    control_kind,
     model_from_card_meta,
     parse_snapshot,
     parse_stream_model,
@@ -17,6 +19,15 @@ from .api import (
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _snippet(obj, limit: int = 400) -> str:
+    """把原始响应安全截断成一行，便于排查日志（不刷屏）。"""
+    try:
+        s = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
+    except (TypeError, ValueError):
+        s = str(obj)
+    return s[:limit] + ("…" if len(s) > limit else "")
 
 
 class JdSmartCoordinator(DataUpdateCoordinator):
@@ -66,18 +77,50 @@ class JdSmartCoordinator(DataUpdateCoordinator):
 
         for dev in self.devices:
             feed_id = dev["feed_id"]
+            name = dev.get("name", feed_id)
             model: dict = {}
+            source = "card_meta"
             if color_client is not None:
                 try:
                     raw = await color_client.get_device_details(feed_id)
                     model = parse_stream_model(raw)
+                    if model:
+                        source = "getDeviceDetails"
+                    else:
+                        # 关键盲点：接口有响应但解析不出 streams（路径不符/空/错误载荷）。
+                        # 以前这里静默回退 card_meta，"只有 Power"无从排查——打出原始片段。
+                        _LOGGER.warning(
+                            "设备 %s(feed=%s) getDeviceDetails 未解析出物模型，回退 card_meta"
+                            "（card_control 通常只标 Power 可控，故只会生成 Power 开关）。"
+                            "用 jd_smart.get_device_model 服务看完整原始响应。响应片段: %s",
+                            name, feed_id, _snippet(raw),
+                        )
                 except JdColorError as err:
-                    _LOGGER.warning("拉取设备 %s 物模型失败，回退 card_meta: %s",
-                                    dev.get("name", feed_id), err)
+                    _LOGGER.warning(
+                        "拉取设备 %s(feed=%s) 物模型失败，回退 card_meta（只会有 Power）: %s",
+                        name, feed_id, err,
+                    )
+            else:
+                _LOGGER.info(
+                    "设备 %s(feed=%s) 无彩虹客户端，用 card_meta 物模型（通常仅 Power 可控）",
+                    name, feed_id,
+                )
             if not model:
                 model = model_from_card_meta(dev)
             if model:
                 self.stream_models[feed_id] = model
+                kinds = [control_kind(m) for m in model.values()]
+                _LOGGER.info(
+                    "设备 %s(feed=%s) 物模型来源=%s，可控实体 switch=%d/select=%d/number=%d（流总数=%d）",
+                    name, feed_id, source,
+                    kinds.count("switch"), kinds.count("select"), kinds.count("number"),
+                    len(model),
+                )
+            else:
+                _LOGGER.warning(
+                    "设备 %s(feed=%s) 无任何物模型（getDeviceDetails 与 card_meta 均为空），不会生成可控实体",
+                    name, feed_id,
+                )
 
     async def async_control(self, dev: dict, commands: list[dict]) -> dict:
         """下发控制并用响应里的全量 streams 乐观刷新（UI 秒变，不必等下一轮轮询）。

@@ -141,6 +141,16 @@
           "description": "原始命令数组，一次写多条：[{stream_id, current_value}, ...]。"
         }
       }
+    },
+    "get_device_model": {
+      "name": "查询设备物模型（诊断）",
+      "description": "拉取设备的彩虹 getDeviceDetails 物模型，返回原始响应+解析+可控归类，用于排查「为什么只有 Power 开关」。",
+      "fields": {
+        "feed_id": {
+          "name": "feed_id",
+          "description": "目标设备 feed_id（已在集成里选过）。"
+        }
+      }
     }
   }
 }

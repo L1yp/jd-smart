@@ -38,6 +38,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SERVICE_CONTROL_DEVICE,
+    SERVICE_GET_DEVICE_MODEL,
     SERVICE_GET_SNAPSHOT,
 )
 from .coordinator import JdSmartCoordinator
@@ -161,6 +162,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not hass.data[DOMAIN]:
             hass.services.async_remove(DOMAIN, SERVICE_GET_SNAPSHOT)
             hass.services.async_remove(DOMAIN, SERVICE_CONTROL_DEVICE)
+            hass.services.async_remove(DOMAIN, SERVICE_GET_DEVICE_MODEL)
     return unloaded
 
 
@@ -172,6 +174,14 @@ def _find_device_by_feed(hass: HomeAssistant, feed_id) -> tuple:
             if str(dev.get("feed_id")) == target:
                 return coordinator, dev
     return None, None
+
+
+def _entry_for_coordinator(hass: HomeAssistant, coordinator) -> ConfigEntry | None:
+    """反查 coordinator 所属的 ConfigEntry（按 entry_id 索引），以复用该账号凭据。"""
+    for entry_id, coord in hass.data.get(DOMAIN, {}).items():
+        if coord is coordinator:
+            return hass.config_entries.async_get_entry(entry_id)
+    return None
 
 
 def _build_commands(data: dict) -> list[dict]:
@@ -263,4 +273,51 @@ def _async_register_services(hass: HomeAssistant) -> None:
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _handle_get_device_model(call: ServiceCall) -> dict:
+        """诊断：拉某设备的彩虹 getDeviceDetails 物模型，返回原始响应 + 解析 + 可控归类。
+
+        排查"为什么只有 Power 开关"：若 control_map 为空/缺 Mode/Wind 等，多半是
+        getDeviceDetails 没返回物模型（接口形态/凭据问题），运行时便静默回退了 card_meta。
+        """
+        from .api import control_kind, parse_stream_model
+        from .color_api import JdColorError
+        from .config_flow import _async_resolve_eid, _build_color_client
+
+        feed_id = call.data[ATTR_FEED_ID]
+        coordinator, dev = _find_device_by_feed(hass, feed_id)
+        if dev is None:
+            raise HomeAssistantError(f"未找到 feed_id={feed_id} 的设备（先在集成里选好设备）")
+        entry = _entry_for_coordinator(hass, coordinator)
+        if entry is None:
+            raise HomeAssistantError("找不到该设备所属配置条目")
+        cfg = _merged(entry)
+        if not cfg.get(CONF_COLOR_SIGN_SECRET) or not cfg.get(CONF_ANDROID_ID):
+            raise HomeAssistantError("缺少彩虹凭据(color_sign_secret/android_id)，无法查询物模型")
+        eid, err = await _async_resolve_eid(hass, cfg)
+        if err or not eid:
+            raise HomeAssistantError(f"eid 解析失败: {err}")
+        color_client = _build_color_client(hass, cfg, eid)
+        try:
+            raw = await color_client.get_device_details(feed_id)
+        except JdColorError as e:
+            raise HomeAssistantError(f"getDeviceDetails 调用失败: {e}") from e
+        model = parse_stream_model(raw)
+        control_map = {sid: k for sid, m in model.items() if (k := control_kind(m))}
+        return {
+            "feed_id": feed_id,
+            "name": dev.get("name"),
+            "streams_parsed": len(model),
+            "control_map": control_map,   # {stream_id: switch|select|number}
+            "model": model,               # 解析后的物模型（含 options/min/max/unit）
+            "raw": raw,                   # 原始响应，便于核对接口形态
+        }
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_DEVICE_MODEL,
+        _handle_get_device_model,
+        schema=vol.Schema({vol.Required(ATTR_FEED_ID): cv.string}),
+        supports_response=SupportsResponse.ONLY,
     )

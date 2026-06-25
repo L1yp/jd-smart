@@ -79,6 +79,9 @@ CONTROL_PATH = "/c/service/integration/v1/controlDevice_v1"
 
 SERVICE_GET_SNAPSHOT = "get_device_snapshot"
 SERVICE_CONTROL_DEVICE = "control_device"
+# 诊断：拉取并返回某设备的彩虹 getDeviceDetails 物模型（原始响应 + 解析 + 可控归类），
+# 用于排查"为什么只生成了 Power 开关"——card_meta 降级模型 card_control 只标了 Power 可控。
+SERVICE_GET_DEVICE_MODEL = "get_device_model"
 ATTR_DEVICE_ID = "device_id"
 ATTR_FEED_ID = "feed_id"
 ATTR_STREAM_ID = "stream_id"   # 控制服务：单条流写值（与 ATTR_VALUE 搭配）
