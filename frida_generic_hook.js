@@ -89,6 +89,9 @@ var SIGNATURES =
 var STACK = false; // 全局：每条都抓调用栈（很贵）。多数情况关，单条用 {stack:true} 精确开
 var STRICT_OVERLOAD = false; // 指定参数没匹配到重载时：false=兜底 hook 全部重载并告警；true=跳过该条
 var INSPECT_OBJECTS = true; // 非 String/byte[]/数值 的对象，是否 toString 取值（限长 OBJ_TXT_MAX）
+var KEY_ENCODED = true; // 对象若是 Key（有 getEncoded()->byte[]，如 HMAC 的 SecretKeySpec）：取其 encoded 密钥 hex。
+                        // 因 SecretKeySpec.toString() 不暴露密钥，且 Frida 隐式 ""+obj 会退化成 [object Object]。
+                        // 极少数怕 getEncoded() 有副作用（如 Keystore 不可导出 key）时设 false，回退纯 toString。
 var THREAD_NAME = true; // 记录调用线程名（每次一次 Java 调用，量极大可关）
 var STASH_FROM_HOOK = false; // 全局：hook 命中时把 this/对象入参/对象返回 retain 进对象仓库（配 RPC）；也可单条 {stash:true} 精确开
 var STASH_CAP = 200; // 对象仓库上限，超了自动丢最旧（防 retain 长跑泄漏）
@@ -214,7 +217,21 @@ function simpleType(jvm) {
   return (dot >= 0 ? jvm.substring(dot + 1) : jvm) + arr;
 }
 
-/* 把返回值格式化成 {type, txt, hex, b64}（byte[] 同时给 txt/hex/b64） */
+/* 若 x 是 Key（SecretKeySpec/SecretKey/PublicKey... 有 getEncoded()->byte[]）：返回 {algo, enc}，否则 null。
+ * SecretKeySpec.toString() 不含密钥、Frida 隐式 ""+obj 还会退化成 [object Object]，故密钥须显式 getEncoded()。 */
+function keyEncoded(x) {
+  if (!KEY_ENCODED) return null;
+  var enc = safe(function () {
+    return x.getEncoded ? x.getEncoded() : null;
+  }, null);
+  if (!isBytes(enc)) return null;
+  var algo = safe(function () {
+    return "" + x.getAlgorithm();
+  }, null);
+  return { algo: algo, enc: enc };
+}
+
+/* 把返回值格式化成 {type, txt, hex, b64}（byte[] 与 Key 同时给 txt/hex/b64） */
 function fmtVal(x) {
   if (x === null || x === undefined)
     return {
@@ -243,6 +260,14 @@ function fmtVal(x) {
       safe(function () {
         return "" + x.getClass().getName();
       }, "obj");
+    var ke = keyEncoded(x);
+    if (ke)
+      return {
+        type: cn + (ke.algo ? "{" + ke.algo + "}" : ""),
+        txt: toTxt(ke.enc),
+        hex: toHex(ke.enc),
+        b64: toB64(ke.enc),
+      };
     return {
       type: cn,
       txt: clip(
@@ -262,7 +287,8 @@ function fmtVal(x) {
 }
 
 /* 把单个参数格式化成「一列的完整值」（不截断）：
- *   String -> 原文；数值/布尔 -> 其字符串；byte[] -> 完整 hex（无损）；其它对象 -> toString；null/缺参 -> null */
+ *   String -> 原文；数值/布尔 -> 其字符串；byte[] -> 完整 hex（无损）；
+ *   Key（SecretKeySpec 等）-> 类名{算法} encoded.hex=密钥hex；其它对象 -> toString；null/缺参 -> null */
 function argStr(x) {
   if (x === null || x === undefined) return null;
   var t = typeof x;
@@ -277,6 +303,11 @@ function argStr(x) {
       safe(function () {
         return "" + x.getClass().getName();
       }, "obj");
+    var ke = keyEncoded(x);
+    if (ke)
+      return (
+        cn + (ke.algo ? "{" + ke.algo + "}" : "") + " encoded.hex=" + toHex(ke.enc)
+      );
     return safe(
       function () {
         return "" + x;
