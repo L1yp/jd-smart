@@ -76,10 +76,23 @@ class JdSmartCoordinator(DataUpdateCoordinator):
             feed_id = dev["feed_id"]
             try:
                 raw = await self.client.get_device_snapshot(dev["device_id"], feed_id)
-                result[feed_id] = parse_snapshot(raw)
+                snap = parse_snapshot(raw)
+                result[feed_id] = snap
+                if not snap.get("ok"):
+                    # 接口有响应但业务失败（tgt 过期 / device_id 或 feed_id 不被接受…）：
+                    # 不抛异常、streams 为空 → 实体静默「不可用」。以前这里无声，无从排查；
+                    # 打出 device_id/feed_id/错误，便于定位"无法获取状态"。
+                    _LOGGER.warning(
+                        "设备 %s 快照业务失败 status=%s error=%s（device_id=%s feed_id=%s）。"
+                        "状态与控制都依赖它——核对：tgt 是否过期、device_id 是否为 md5(android_id)"
+                        "（不是 App 的安装 UUID）、feed_id 是否正确。",
+                        dev.get("name", feed_id), snap.get("api_status"), snap.get("error"),
+                        dev.get("device_id"), feed_id,
+                    )
             except JdSmartError as err:
                 # 单个设备失败不拖垮其它设备（tgt 过期会让所有都失败，日志可见）
-                _LOGGER.warning("查询设备 %s 失败: %s", dev.get("name", feed_id), err)
+                _LOGGER.warning("查询设备 %s 失败（device_id=%s feed_id=%s）: %s",
+                                dev.get("name", feed_id), dev.get("device_id"), feed_id, err)
                 result[feed_id] = None
         return result
 
@@ -158,4 +171,12 @@ class JdSmartCoordinator(DataUpdateCoordinator):
             streams.update(parsed["streams"])  # 响应若是子集也不丢其它流
             data[dev["feed_id"]] = {**parsed, "streams": streams}
             self.async_set_updated_data(data)
+        elif not parsed.get("ok"):
+            # 控制接口业务失败：不抛异常，UI 会以为成功但设备没动（"控制不对"）。打出来便于排查。
+            _LOGGER.warning(
+                "控制设备 %s 业务失败 status=%s error=%s（device_id=%s feed_id=%s commands=%s）。"
+                "核对 device_id 是否为 md5(android_id)、tgt 是否过期、feed_id/stream_id 是否正确。",
+                dev.get("name", dev.get("feed_id")), parsed.get("api_status"), parsed.get("error"),
+                dev.get("device_id"), dev.get("feed_id"), commands,
+            )
         return parsed
