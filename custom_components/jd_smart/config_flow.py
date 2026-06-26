@@ -236,6 +236,33 @@ def _stream_reference_rows(streams: list[str], card_meta: dict) -> str:
     return "".join(rows)
 
 
+def _merge_stream_meta(streams: list[str], card_meta: dict, model: dict) -> dict:
+    """编辑表单/参考表的「有效参数元数据」：getDeviceDetails 物模型（权威 stream_name/单位/枚举）
+    叠加发现期 card_meta（card_desc 残缺时兜底），返回 {sid:{name,unit,options}}（与 card_meta 同形，
+    可直接喂 _stream_reference_rows 和字段默认值）。
+
+    很多设备（电量计/空调伴侣等）gw 发现的 card_desc 为空，参数名只在 getDeviceDetails 里
+    （parse_stream_model 的 name=stream_name）。不并入，「原名称」列与预填名就全空——正是用户反馈的
+    「编辑传感器没有参数名称」。switch/select/number 早已读物模型名（control.control_name），这里把
+    只读流的编辑入口对齐。
+    """
+    card_meta = card_meta or {}
+    model = model or {}
+    out: dict[str, dict] = {}
+    for sid in streams:
+        cm = card_meta.get(sid) or {}
+        md = model.get(sid) or {}
+        mname = md.get("name")
+        if mname == sid:  # parse_stream_model 缺 stream_name 时把 name 填成 sid，等于无名
+            mname = None
+        out[sid] = {
+            "name": mname or cm.get("name"),
+            "unit": md.get("unit") or cm.get("unit"),
+            "options": md.get("options") or cm.get("options"),
+        }
+    return out
+
+
 def _device_cache_entry(d: dict, device_id: str) -> dict:
     """发现结果 → 持久化进 options 的精简结构（含 card_meta 供传感器复合）。
 
@@ -445,6 +472,14 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
         opts.update(updates)
         return opts
 
+    def _stream_model_for(self, feed) -> dict:
+        """运行中 coordinator 在 setup 时拉好的该设备 getDeviceDetails 物模型
+        {stream_id:{name,unit,options,...}}；未加载/未命中则空 dict（编辑表单退回 card_meta）。
+        feed 是字符串、stream_models 键是原始 feed_id，故按 str 比对。"""
+        coordinator = (self.hass.data.get(DOMAIN, {}) or {}).get(self._entry.entry_id)
+        models = getattr(coordinator, "stream_models", None) or {}
+        return next((m for fid, m in models.items() if str(fid) == str(feed)), {})
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
@@ -572,6 +607,8 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
             return self.async_abort(reason="no_devices")
         streams = dev.get("streams") or []
         card_meta = dev.get("card_meta") or {}
+        # 物模型（getDeviceDetails 的 stream_name/单位/枚举）叠加 card_meta，作参考表与预填名的来源。
+        meta = _merge_stream_meta(streams, card_meta, self._stream_model_for(self._edit_feed))
         all_ov = dict(self._entry.options.get(CONF_STREAM_OVERRIDES) or {})
         cur = all_ov.get(str(self._edit_feed), {})
 
@@ -590,7 +627,7 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
 
         fields: dict = {}
         for sid in streams:
-            cm = card_meta.get(sid, {})
+            cm = meta.get(sid, {})  # 已并入物模型 stream_name/单位
             c = cur.get(sid, {})
             name_def = c.get("name") or cm.get("name") or ""
             unit_def = c.get("unit") if c.get("unit") is not None else (cm.get("unit") or "")
@@ -603,7 +640,7 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema(fields),
             description_placeholders={
                 "device": dev.get("name") or str(self._edit_feed),
-                "reference": _stream_reference_rows(streams, card_meta),
+                "reference": _stream_reference_rows(streams, meta),
             },
         )
 

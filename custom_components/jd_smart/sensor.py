@@ -37,7 +37,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import BINARY_STREAMS, DOMAIN
-from .control import control_map
+from .control import control_map, model_entry
 from .coordinator import JdSmartCoordinator
 
 # ── 原始值 → 物理单位的缩放（设备统一用“毫”单位：mV / mA / mW）──────────────
@@ -86,30 +86,36 @@ def is_binary_stream(dev: dict, stream_id: str) -> bool:
     return bool(cm.get("controllable")) and len(cm.get("options") or {}) == 2
 
 
-def resolve_stream(dev: dict, stream_id: str, overrides: dict) -> dict:
-    """复合「用户覆盖 > card_meta > 内置 SENSOR_META」。
+def resolve_stream(dev: dict, stream_id: str, overrides: dict, model: dict | None = None) -> dict:
+    """复合「用户覆盖 > 物模型 stream_name > card_meta > 内置 SENSOR_META」。
 
-    - name：覆盖名 > card_desc.stream_text > stream_id（名称可套用）
-    - unit：覆盖单位 > 内置单位 > card_desc.unit（单位可能不准，用户可改）
+    - name：覆盖名 > getDeviceDetails 物模型 stream_name > card_desc.stream_text > stream_id
+      （很多设备 card_desc 为空，名称只在物模型里；不并入实体名就退化成 Voltage/Electric 这种英文 id。
+      switch/select/number 早已用物模型名 control.control_name，这里把只读 sensor/binary_sensor 对齐）
+    - unit：覆盖单位 > 内置单位 > card_desc.unit > 物模型单位（内置单位优先，保物理缩放/device_class）
     - factor/state_class/precision：始终取内置（物理缩放，与单位绑定）
     - device_class：仅在内置已知且单位未被改动时保留（避免 HA 单位/类约束告警）
-    - options：card_desc/card_control 的 {code: label}，有则当枚举按 label 显示
+    - options：card_desc/card_control 或物模型 value_des 的 {code: label}，有则当枚举按 label 显示
     """
     cm = (dev.get("card_meta") or {}).get(stream_id) or {}
+    md = model or {}  # 该流的物模型项（getDeviceDetails）；control.model_entry 取得
     bi = SENSOR_META.get(stream_id, {})
     ov = overrides.get(stream_id) or None
     bi_unit = bi.get("unit")
-    unit = ov["unit"] if (ov and ov.get("unit")) else (bi_unit or cm.get("unit"))
+    unit = ov["unit"] if (ov and ov.get("unit")) else (bi_unit or cm.get("unit") or md.get("unit"))
     device_class = bi.get("device_class") if (bi.get("device_class") and unit == bi_unit) else None
+    mname = md.get("name")
+    if mname == stream_id:  # 物模型缺 stream_name 时 name 退化成 id 本身，视作无名
+        mname = None
     return {
-        "name": (ov.get("name") if ov else None) or cm.get("name") or stream_id,
+        "name": (ov.get("name") if ov else None) or mname or cm.get("name") or stream_id,
         "enabled": ov.get("enabled", True) if ov else True,
         "unit": unit,
         "factor": bi.get("factor", 1),
         "device_class": device_class,
         "state_class": bi.get("state_class"),
         "precision": bi.get("precision"),
-        "options": cm.get("options") or None,
+        "options": cm.get("options") or md.get("options") or None,
     }
 
 
@@ -233,7 +239,8 @@ class JdStreamSensor(CoordinatorEntity[JdSmartCoordinator], SensorEntity):
         self._feed = dev["feed_id"]
         self._stream = stream_id
         base = dev.get("name") or f"JD {self._feed}"
-        meta = resolve_stream(dev, stream_id, overrides_for(coordinator, self._feed))
+        meta = resolve_stream(dev, stream_id, overrides_for(coordinator, self._feed),
+                              model_entry(coordinator, dev, stream_id))
         self._factor = meta["factor"]
         self._options = meta["options"]  # {code: label}；有则按枚举映射 label，不加单位/缩放
         self._attr_name = f"{base} {meta['name']}"

@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .control import control_map
+from .control import control_map, model_entry
 from .coordinator import JdSmartCoordinator
 from .sensor import device_info, is_binary_stream, overrides_for, resolve_stream, stream_enabled
 
@@ -64,7 +64,8 @@ class JdStreamBinarySensor(CoordinatorEntity[JdSmartCoordinator], BinarySensorEn
         self._feed = dev["feed_id"]
         self._stream = stream_id
         base = dev.get("name") or f"JD {self._feed}"
-        meta = resolve_stream(dev, stream_id, overrides_for(coordinator, self._feed))
+        meta = resolve_stream(dev, stream_id, overrides_for(coordinator, self._feed),
+                              model_entry(coordinator, dev, stream_id))
         self._attr_name = f"{base} {meta['name']}"
         self._attr_unique_id = f"{entry.entry_id}_{self._feed}_{stream_id}"
         self._attr_device_info = device_info(dev)
