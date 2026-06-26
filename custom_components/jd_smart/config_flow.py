@@ -1,10 +1,10 @@
 """Config & options flow for JD Smart（彩虹自动发现版）。
 
 ConfigFlow（首次安装，支持多账号）:
-    user    账号 4 必填项（tgt / jmafinger / color_pin / android_id）；其余 App/设备级
-            常量用默认值自动补。提交时以 color_pin 作 unique_id（同一台手机可加多个京东
-            账号；重复账号会中止），并解析 eid（填了用填的，否则查磁盘缓存，再否则
-            ds.json 现铸并缓存）
+    user    账号 3 必填项（tgt / jmafinger / color_pin）+ 设备身份（device_id 或 android_id
+            二选一，首选 device_id）；其余 App/设备级常量用默认值自动补。提交时以 color_pin 作
+            unique_id（同一台手机可加多个京东账号；重复账号会中止），并解析 eid（填了用填的，
+            否则查磁盘缓存，再否则 ds.json 现铸并缓存）
     houses  彩虹 getHouses → 多选家庭
     devices 选中家庭 getAllDevices → 多选设备 → 缓存进 entry.options → 建条目
 
@@ -13,7 +13,7 @@ OptionsFlow（菜单）:
     rediscover  重新发现家庭→设备并更新缓存
     streams     选设备 → 逐流改 名称/单位/启用（card_meta 预填）
     settings    高级：全部参数（seg1/key/机型/eid/间隔…；旧条目补齐也在此）
-    manual      兜底：手填 名称|feed_id（device_id 自动 md5(android_id)）
+    manual      兜底：手填 名称|feed_id（device_id 取设备身份：直填值或 md5(android_id)）
 """
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ from .const import (
     CONF_COLOR_SIGN_SECRET,
     CONF_D_BRAND,
     CONF_D_MODEL,
+    CONF_DEVICE_ID,
     CONF_DEVICE_ID_OVERRIDE,
     CONF_DEVICES,
     CONF_EID,
@@ -106,21 +107,24 @@ def _with_defaults(data: dict) -> dict:
 
 
 def _credentials_schema(cfg: dict | None = None) -> vol.Schema:
-    """账号 4 必填项表单（首次安装步 user / 选项 credentials 共用）。
-    顺序按用户习惯：tgt → jmafinger → color_pin → android_id。"""
+    """账号必填 3 项 + 设备身份（device_id 或 android_id 二选一，首选 device_id）。
+    首次安装步 user / 选项 credentials 共用。device_id 放前面（首选），android_id 兜底。
+    部分机型读不到 android_id，可直接填 device_id（= md5(android_id)，同一个值）。"""
     cfg = cfg or {}
     return vol.Schema(
         {
             vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
             vol.Required(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
             vol.Required(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
-            vol.Required(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
+            vol.Optional(CONF_DEVICE_ID, default=cfg.get(CONF_DEVICE_ID, "")): str,
+            vol.Optional(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
         }
     )
 
 
-def _settings_schema(cfg: dict, opts: dict) -> vol.Schema:
-    """选项里「凭据与设备信息」一站式编辑（旧条目补齐 / 随时修改）。默认值取 merged 配置。"""
+def _settings_schema(cfg: dict) -> vol.Schema:
+    """选项里「凭据与设备信息」一站式编辑（旧条目补齐 / 随时修改）。默认值取 merged 配置。
+    设备身份 android_id / device_id 二选一（首选 device_id）；device_id 预填会把旧 device_id_override 带出来。"""
     return vol.Schema(
         {
             vol.Required(CONF_COLOR_SIGN_SECRET,
@@ -130,7 +134,9 @@ def _settings_schema(cfg: dict, opts: dict) -> vol.Schema:
             vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
             vol.Required(CONF_SEG1, default=cfg.get(CONF_SEG1) or DEFAULT_SEG1): str,
             vol.Required(CONF_KEY, default=cfg.get(CONF_KEY) or DEFAULT_KEY): str,
-            vol.Required(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
+            vol.Optional(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
+            vol.Optional(CONF_DEVICE_ID,
+                         default=cfg.get(CONF_DEVICE_ID) or cfg.get(CONF_DEVICE_ID_OVERRIDE) or ""): str,
             vol.Required(CONF_D_BRAND, default=cfg.get(CONF_D_BRAND, DEFAULT_D_BRAND)): str,
             vol.Required(CONF_D_MODEL, default=cfg.get(CONF_D_MODEL, DEFAULT_D_MODEL)): str,
             vol.Required(CONF_OS_VERSION, default=cfg.get(CONF_OS_VERSION, DEFAULT_OS_VERSION)): str,
@@ -144,7 +150,6 @@ def _settings_schema(cfg: dict, opts: dict) -> vol.Schema:
             vol.Required(CONF_CHANNEL, default=cfg.get(CONF_CHANNEL, DEFAULT_CHANNEL)): str,
             vol.Required(CONF_PLAT, default=cfg.get(CONF_PLAT, DEFAULT_PLAT)): str,
             vol.Optional(CONF_SCAN_INTERVAL, default=cfg.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)): int,
-            vol.Optional(CONF_DEVICE_ID_OVERRIDE, default=opts.get(CONF_DEVICE_ID_OVERRIDE, "")): str,
         }
     )
 
@@ -168,11 +173,17 @@ def _assemble_profile(data: dict, eid: str) -> dict:
 
 
 def _build_color_client(hass, data: dict, eid: str) -> JdColorClient:
-    """彩虹发现客户端（aiohttp 走 HA 共享 session）。"""
+    """彩虹发现客户端（aiohttp 走 HA 共享 session）。
+
+    aid=uuid=device_id（= 用户直填的 device_id 或 md5(android_id)），直接注入 profile，
+    故不再依赖 android_id 原值——读不到 android_id 的机型只填 device_id 也能签名。
+    """
+    prof = _assemble_profile(data, eid)
+    prof["aid"] = prof["uuid"] = _device_id_for(data)
     return JdColorClient(
         async_get_clientsession(hass),
-        profile=_assemble_profile(data, eid),
-        android_id=data[CONF_ANDROID_ID],
+        profile=prof,
+        android_id=None,  # aid/uuid 已按 device_id 注入 profile
         ep_hdid="",
         sign_secret=data[CONF_COLOR_SIGN_SECRET],
         pin=data[CONF_COLOR_PIN],
@@ -182,12 +193,27 @@ def _build_color_client(hass, data: dict, eid: str) -> JdColorClient:
 
 
 def _device_id_for(data: dict, options: dict | None = None) -> str:
-    """getDeviceSnapshot 的 device_id：优先 options 覆盖，否则 md5(android_id)；都没有返回空串。"""
-    override = ((options or {}).get(CONF_DEVICE_ID_OVERRIDE) or "").strip()
-    if override:
-        return override
-    aid = data.get(CONF_ANDROID_ID)
+    """设备 device_id（= 彩虹 aid/uuid = md5(android_id)，同一个值）。
+
+    优先级：直填 device_id > device_id_override(旧字段) > md5(android_id)。
+    部分机型读不到 android_id，用户直接填 device_id 即可；都没填返回空串。
+    options 给了则其非空值覆盖 data（兼容把覆盖项放 options 的老条目）。
+    """
+    src = dict(data)
+    if options:
+        for k, v in options.items():
+            if v not in (None, ""):
+                src[k] = v
+    explicit = (src.get(CONF_DEVICE_ID) or src.get(CONF_DEVICE_ID_OVERRIDE) or "").strip()
+    if explicit:
+        return explicit
+    aid = (src.get(CONF_ANDROID_ID) or "").strip()
     return hashlib.md5(aid.encode("utf-8")).hexdigest() if aid else ""
+
+
+def _has_identity(data: dict, options: dict | None = None) -> bool:
+    """是否具备设备身份（android_id 或 device_id 任一）。无则无法签名/发现。"""
+    return bool(_device_id_for(data, options))
 
 
 def _parse_houses(resp: dict) -> list[dict]:
@@ -263,19 +289,23 @@ def _device_cache_entry(d: dict, device_id: str) -> dict:
 
 
 async def _async_resolve_eid(hass, data: dict) -> tuple[str | None, str | None]:
-    """解析 eid：填了用填的；否则查缓存；再否则 ds.json 现铸并写缓存。返回 (eid, error)。"""
+    """解析 eid：填了用填的；否则查缓存；再否则 ds.json 现铸并写缓存。返回 (eid, error)。
+
+    缓存键用设备身份：有 android_id 用 android_id（与旧缓存兼容），否则用 device_id。
+    eid 本身与身份无关（async_fetch_eid 不吃 android_id），键只为复用/去重。
+    """
     eid = (data.get(CONF_EID) or "").strip()
     if eid:
         return eid, None
-    android_id = data[CONF_ANDROID_ID]
-    cached = await async_get_cached_eid(hass, android_id)
+    key = (data.get(CONF_ANDROID_ID) or "").strip() or _device_id_for(data)
+    cached = await async_get_cached_eid(hass, key)
     if cached:
         return cached, None
     try:
         eid, t = await async_fetch_eid(async_get_clientsession(hass))
     except EidFetchError as err:
         return None, str(err)
-    await async_save_eid(hass, android_id, eid, t)
+    await async_save_eid(hass, key, eid, t)
     return eid, None
 
 
@@ -379,18 +409,21 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         placeholders = {"detail": ""}
         if user_input is not None:
-            self._data = _with_defaults(user_input)  # 4 必填项 + 自动补齐常量默认值
-            # 多账号：以 color_pin 作 unique_id —— 同一台手机可加多个京东账号，
-            # 重复账号（同 pin）会在此中止（already_configured）。
-            await self.async_set_unique_id(self._data[CONF_COLOR_PIN])
-            self._abort_if_unique_id_configured()
-            eid, err = await _async_resolve_eid(self.hass, self._data)
-            if err:
-                errors["base"] = "eid_fetch_failed"
-                placeholders["detail"] = err
+            self._data = _with_defaults(user_input)  # 必填项 + 自动补齐常量默认值
+            if not _has_identity(self._data):
+                errors["base"] = "need_identity"  # device_id / android_id 至少给一个
             else:
-                self._data[CONF_EID] = eid
-                return await self.async_step_houses()
+                # 多账号：以 color_pin 作 unique_id —— 同一台手机可加多个京东账号，
+                # 重复账号（同 pin）会在此中止（already_configured）。
+                await self.async_set_unique_id(self._data[CONF_COLOR_PIN])
+                self._abort_if_unique_id_configured()
+                eid, err = await _async_resolve_eid(self.hass, self._data)
+                if err:
+                    errors["base"] = "eid_fetch_failed"
+                    placeholders["detail"] = err
+                else:
+                    self._data[CONF_EID] = eid
+                    return await self.async_step_houses()
         return self.async_show_form(
             step_id="user",
             data_schema=_credentials_schema(self._data),
@@ -482,16 +515,22 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
             menu_options=["credentials", "rediscover", "streams", "settings", "manual"],
         )
 
-    # --- 只更新账号 4 项（tgt 会过期，最常用）---
+    # --- 只更新账号必填项 + 设备身份（tgt 会过期，最常用）---
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            self._eid = None  # android_id/tgt 可能变了，下次发现时重新解析 eid
-            return self.async_create_entry(title="", data=self._merged_options(**user_input))
+            # 设备身份二选一校验：结合已存值，device_id 或 android_id 至少有一个
+            merged = {**merged_config(self._entry), **user_input}
+            if not _has_identity(merged):
+                errors["base"] = "need_identity"
+            else:
+                self._eid = None  # 身份/tgt 可能变了，下次发现时重新解析 eid
+                return self.async_create_entry(title="", data=self._merged_options(**user_input))
         cfg = merged_config(self._entry)
         return self.async_show_form(
-            step_id="credentials", data_schema=_credentials_schema(cfg)
+            step_id="credentials", data_schema=_credentials_schema(cfg), errors=errors
         )
 
     # --- 凭据与设备信息（一站式编辑；旧条目在此补齐 color 凭据/android_id/eid）---
@@ -503,7 +542,7 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=self._merged_options(**user_input))
         cfg = merged_config(self._entry)
         return self.async_show_form(
-            step_id="settings", data_schema=_settings_schema(cfg, self._entry.options)
+            step_id="settings", data_schema=_settings_schema(cfg)
         )
 
     # --- 重选设备（houses → devices）---
@@ -511,8 +550,8 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         cfg = merged_config(self._entry)
-        # 旧条目可能没填 color 凭据/android_id：先去「凭据与设备信息」补齐
-        if not cfg.get(CONF_ANDROID_ID) or not cfg.get(CONF_COLOR_SIGN_SECRET):
+        # 旧条目可能没填 color 凭据 / 设备身份：先去「更新凭据」或「高级设置」补齐
+        if not _has_identity(cfg) or not cfg.get(CONF_COLOR_SIGN_SECRET):
             return self.async_abort(reason="missing_device_config")
         if self._eid is None:
             eid, err = await _async_resolve_eid(self.hass, cfg)

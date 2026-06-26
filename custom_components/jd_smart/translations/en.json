@@ -3,12 +3,13 @@
     "step": {
       "user": {
         "title": "JD Smart (小京鱼) — Account credentials",
-        "description": "Each JD account needs only these 4 fields (captured from the app): tgt login ticket (expires), jmafinger and pin from the cookie, android_id to derive the device identity. All other app/device params use defaults — tweak them later under Options → Advanced.\n\nThe same phone can hold multiple accounts; they are distinguished by pin.",
+        "description": "Each JD account needs 3 required fields (captured from the app): tgt login ticket (expires), jmafinger and pin from the cookie. Plus a device identity — fill device_id OR android_id (prefer device_id; some phones can't read android_id, and device_id = md5(android_id), the same value). All other app/device params use defaults — tweak them later under Options → Advanced.\n\nThe same phone can hold multiple accounts; they are distinguished by pin.",
         "data": {
           "tgt": "tgt (login ticket, expires)",
           "color_jmafinger": "color_jmafinger (cookie UUID)",
           "color_pin": "color_pin (cookie pin, account id)",
-          "android_id": "android_id (Settings.Secure.ANDROID_ID, 16hex)"
+          "device_id": "device_id (preferred; = md5(android_id))",
+          "android_id": "android_id (Settings.Secure.ANDROID_ID, 16hex; or fill device_id instead)"
         }
       },
       "houses": {
@@ -23,7 +24,8 @@
       }
     },
     "error": {
-      "eid_fetch_failed": "Failed to fetch eid: {detail}. Enter an eid manually, or check android_id/network."
+      "need_identity": "Fill device_id or android_id (at least one). Prefer device_id — it equals md5(android_id).",
+      "eid_fetch_failed": "Failed to fetch eid: {detail}. Enter an eid manually, or check the device identity/network."
     },
     "abort": {
       "already_configured": "This JD account (pin) is already configured. Don't add the same account twice; use a different pin for another account.",
@@ -37,7 +39,7 @@
       "init": {
         "title": "JD Smart options",
         "menu_options": {
-          "credentials": "Update credentials (tgt/jmafinger/pin/android_id)",
+          "credentials": "Update credentials (tgt/jmafinger/pin/device_id)",
           "rediscover": "Re-discover devices",
           "streams": "Edit sensors / units",
           "settings": "Advanced (all parameters)",
@@ -46,17 +48,18 @@
       },
       "credentials": {
         "title": "Update credentials",
-        "description": "Update just these 4 fields (tgt expires most often): tgt login ticket, jmafinger/pin (cookie), android_id. Everything else stays unchanged; to edit seg1/key/model/eid/interval use Advanced. After updating, run Re-discover if your devices changed.",
+        "description": "Update these fields (tgt expires most often): tgt login ticket, jmafinger/pin (cookie), and the device identity — device_id or android_id (fill either, prefer device_id). Everything else stays unchanged; to edit seg1/key/model/eid/interval use Advanced. After updating, run Re-discover if your devices changed.",
         "data": {
           "tgt": "tgt (login ticket, expires)",
           "color_jmafinger": "color_jmafinger (cookie UUID)",
           "color_pin": "color_pin (cookie pin, account id)",
-          "android_id": "android_id (16hex)"
+          "device_id": "device_id (preferred; = md5(android_id))",
+          "android_id": "android_id (16hex; or fill device_id instead)"
         }
       },
       "settings": {
         "title": "Advanced (all parameters)",
-        "description": "Rainbow color_* discovers devices; seg1/key poll snapshots; android_id derives aid/device_id; leave eid empty to auto-fetch. Upgrading from the old version: fill the color_* / android_id fields here, then run Re-discover.",
+        "description": "Rainbow color_* discovers devices; seg1/key poll snapshots; device_id (or android_id) derives aid/uuid; leave eid empty to auto-fetch. Upgrading from the old version: fill the color_* and device_id/android_id fields here, then run Re-discover.",
         "data": {
           "color_sign_secret": "color_sign_secret (rainbow HMAC key)",
           "color_pin": "color_pin (cookie pin)",
@@ -64,7 +67,8 @@
           "tgt": "tgt (login ticket)",
           "seg1": "seg1 (constant id)",
           "key": "HmacSHA1 key",
-          "android_id": "android_id (16hex)",
+          "android_id": "android_id (16hex; or use device_id)",
+          "device_id": "device_id (preferred; = md5(android_id), overrides android_id)",
           "d_brand": "Brand",
           "d_model": "Model",
           "os_version": "OS version (SDK_INT)",
@@ -77,8 +81,7 @@
           "plat_version": "plat_version",
           "channel": "channel",
           "plat": "plat",
-          "scan_interval": "Scan interval (seconds)",
-          "device_id_override": "device_id override (blank = md5(android_id))"
+          "scan_interval": "Scan interval (seconds)"
         }
       },
       "rediscover": {"title": "Select homes", "data": {"houses": "Homes"}},
@@ -94,7 +97,7 @@
       },
       "manual": {
         "title": "Manual devices",
-        "description": "One per line: name|feed_id. device_id is auto md5(android_id).",
+        "description": "One per line: name|feed_id. device_id comes from the account identity (device_id, or md5(android_id)).",
         "data": {"manual": "Devices (name|feed_id, one per line)"}
       }
     },
@@ -102,7 +105,7 @@
       "cannot_connect": "Discovery failed. Check tgt and retry.",
       "no_houses": "No homes returned for this account.",
       "no_devices": "No devices cached. Use Re-discover first.",
-      "missing_device_config": "Missing color_* credentials or android_id. Open 'Credentials & device info' and fill them first."
+      "missing_device_config": "Missing color_* credentials or device identity (device_id/android_id). Open 'Update credentials' (or Advanced) and fill them first."
     }
   },
   "services": {

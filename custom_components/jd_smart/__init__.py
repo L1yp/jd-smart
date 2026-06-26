@@ -1,7 +1,6 @@
 """JD Smart (小京鱼) integration."""
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 
@@ -20,11 +19,9 @@ from .const import (
     ATTR_FEED_ID,
     ATTR_STREAM_ID,
     ATTR_VALUE,
-    CONF_ANDROID_ID,
     CONF_APP_VERSION,
     CONF_CHANNEL,
     CONF_COLOR_SIGN_SECRET,
-    CONF_DEVICE_ID_OVERRIDE,
     CONF_DEVICES,
     CONF_HARD_PLATFORM,
     CONF_KEY,
@@ -49,15 +46,16 @@ _LOGGER = logging.getLogger(__name__)
 def _load_devices(entry: ConfigEntry) -> list[dict]:
     """读 entry.options 里的设备：新版是结构化 list[dict]（含 card_meta），旧版兼容文本。
 
-    统一 device_id：options 覆盖 > 缓存值 > md5(android_id)。运行时轮询只需 device_id+feed_id。
+    统一 device_id：直填 device_id / device_id_override / md5(android_id)（同一个值）> 缓存值。
+    解析单一真源用 config_flow._device_id_for。运行时轮询只需 device_id+feed_id。
     """
+    from .config_flow import _device_id_for  # 局部导入避免顶层依赖 config_flow
+
     raw = entry.options.get(CONF_DEVICES)
     devices = [dict(d) for d in raw] if isinstance(raw, list) else parse_devices(raw)
-    android_id = _merged(entry).get(CONF_ANDROID_ID)
-    override = (entry.options.get(CONF_DEVICE_ID_OVERRIDE) or "").strip()
-    default_did = hashlib.md5(android_id.encode("utf-8")).hexdigest() if android_id else None
+    resolved = _device_id_for(_merged(entry))
     for d in devices:
-        d["device_id"] = override or d.get("device_id") or default_did
+        d["device_id"] = resolved or d.get("device_id")
     return devices
 
 
@@ -114,11 +112,11 @@ async def _async_fetch_models(hass: HomeAssistant, entry: ConfigEntry, coordinat
     实体退回 card_meta 派生（不阻断 setup）。物模型只在此拉一次（静态元数据）。
     """
     # 局部导入：避免 __init__ 顶层依赖 config_flow（HA 加载顺序更稳）
-    from .config_flow import _async_resolve_eid, _build_color_client
+    from .config_flow import _async_resolve_eid, _build_color_client, _has_identity
 
     cfg = _merged(entry)
-    if not cfg.get(CONF_COLOR_SIGN_SECRET) or not cfg.get(CONF_ANDROID_ID):
-        return  # 旧条目没填彩虹凭据：跳过
+    if not cfg.get(CONF_COLOR_SIGN_SECRET) or not _has_identity(cfg):
+        return  # 旧条目没填彩虹凭据/设备身份：跳过
     try:
         eid, err = await _async_resolve_eid(hass, cfg)
         if err or not eid:
@@ -283,7 +281,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         """
         from .api import control_kind, parse_stream_model
         from .color_api import JdColorError
-        from .config_flow import _async_resolve_eid, _build_color_client
+        from .config_flow import _async_resolve_eid, _build_color_client, _has_identity
 
         feed_id = call.data[ATTR_FEED_ID]
         coordinator, dev = _find_device_by_feed(hass, feed_id)
@@ -293,8 +291,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if entry is None:
             raise HomeAssistantError("找不到该设备所属配置条目")
         cfg = _merged(entry)
-        if not cfg.get(CONF_COLOR_SIGN_SECRET) or not cfg.get(CONF_ANDROID_ID):
-            raise HomeAssistantError("缺少彩虹凭据(color_sign_secret/android_id)，无法查询物模型")
+        if not cfg.get(CONF_COLOR_SIGN_SECRET) or not _has_identity(cfg):
+            raise HomeAssistantError("缺少彩虹凭据(color_sign_secret)或设备身份(device_id/android_id)，无法查询物模型")
         eid, err = await _async_resolve_eid(hass, cfg)
         if err or not eid:
             raise HomeAssistantError(f"eid 解析失败: {err}")

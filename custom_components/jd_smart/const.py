@@ -23,8 +23,11 @@ CONF_COLOR_PIN = "color_pin"
 CONF_COLOR_JMAFINGER = "color_jmafinger"
 
 # ── config entry：设备身份/档位 ───────────────────────────────────────────
-CONF_ANDROID_ID = "android_id"   # Settings.Secure.ANDROID_ID(16hex)；自动算 aid=uuid=md5、device_id
-CONF_EID = "eid"                 # 设备指纹；留空则按 android_id 走 ds.json 自动铸并缓存
+# 设备身份二选一：android_id 或 device_id（首选 device_id，部分机型读不到 android_id）。
+# device_id == 彩虹 aid == uuid == md5(android_id)，是同一个值；填了 device_id 就不需要 android_id。
+CONF_ANDROID_ID = "android_id"   # Settings.Secure.ANDROID_ID(16hex)；自动算 aid=uuid=md5=device_id
+CONF_DEVICE_ID = "device_id"     # 直填设备 device_id(=md5(android_id))；与 android_id 二选一，优先用它
+CONF_EID = "eid"                 # 设备指纹；留空则按身份(android_id/device_id)走 ds.json 自动铸并缓存
 CONF_D_BRAND = "d_brand"
 CONF_D_MODEL = "d_model"
 CONF_OS_VERSION = "os_version"     # -> color_profile["osVersion"]
@@ -36,7 +39,7 @@ CONF_NETWORK_TYPE = "network_type"  # -> color_profile["networkType"]
 CONF_DEVICES = "devices"               # 结构化设备缓存：list[{feed_id,device_id,name,room,...,card_meta}]
 CONF_HOUSES = "houses"                 # 家庭缓存：list[{house_id,house_name}]
 CONF_STREAM_OVERRIDES = "stream_overrides"  # {feed_id: {stream_id: {name,unit,enabled}}}
-CONF_DEVICE_ID_OVERRIDE = "device_id_override"  # 不填则 device_id = md5(android_id)
+CONF_DEVICE_ID_OVERRIDE = "device_id_override"  # 旧字段：等价于 CONF_DEVICE_ID，仍兼容读取
 CONF_SCAN_INTERVAL = "scan_interval"
 
 # ── 旧接口默认值（getDeviceSnapshot）────────────────────────────────────────
