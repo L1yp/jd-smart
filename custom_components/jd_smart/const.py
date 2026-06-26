@@ -42,9 +42,11 @@ CONF_STREAM_OVERRIDES = "stream_overrides"  # {feed_id: {stream_id: {name,unit,e
 CONF_DEVICE_ID_OVERRIDE = "device_id_override"  # 旧字段：等价于 CONF_DEVICE_ID，仍兼容读取
 CONF_SCAN_INTERVAL = "scan_interval"
 
-# ── 旧接口默认值（getDeviceSnapshot）────────────────────────────────────────
+# ── api.smart / gw 默认 App 档（进 device_md 签名 + query）─────────────────────
+# 取用户实测通过 gw 发现的组合 HWI-AL00/7.3.0/9（device_id 不签名故不在此）。app_version 只要
+# 与 query 自洽即可被 DEFAULT_KEY 验签——旧条目已把自己的版本存进 data，改这里只影响新装。
 DEFAULT_HARD_PLATFORM = "HWI-AL00"
-DEFAULT_APP_VERSION = "1.17.0"
+DEFAULT_APP_VERSION = "7.3.0"
 DEFAULT_PLAT_VERSION = "9"
 DEFAULT_CHANNEL = "xjgw-android"
 DEFAULT_PLAT = "Android"
