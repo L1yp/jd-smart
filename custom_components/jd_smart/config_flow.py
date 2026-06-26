@@ -108,17 +108,16 @@ def _with_defaults(data: dict) -> dict:
 
 
 def _credentials_schema(cfg: dict | None = None) -> vol.Schema:
-    """gw 发现只需 tgt + 设备身份（device_id 或 android_id 二选一，首选 device_id）。
-    首次安装步 user / 选项 credentials 共用。pin/jmafinger 为**可选增强**——填了才走彩虹
-    getDeviceDetails 拿完整物模型（风扇档位/模式等），不填只生成开关(Power)+传感器。"""
+    """主表单只需 tgt + device_id（直接粘贴抓包/curl 里的 device_id，UUID 即可——它不进
+    签名、服务端不严格校验）。首次安装步 user / 选项 credentials 共用。
+
+    android_id（没有 device_id 时的备选身份）与 pin/jmafinger（可选的完整物模型增强：填了
+    才走彩虹 getDeviceDetails 拿风扇档位/模式等）都挪到「高级设置」，这里保持最小。"""
     cfg = cfg or {}
     return vol.Schema(
         {
             vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
             vol.Optional(CONF_DEVICE_ID, default=cfg.get(CONF_DEVICE_ID, "")): str,
-            vol.Optional(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
-            vol.Optional(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
-            vol.Optional(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
         }
     )
 

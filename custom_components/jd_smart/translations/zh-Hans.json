@@ -3,13 +3,10 @@
     "step": {
       "user": {
         "title": "小京鱼 JD Smart —— 账号凭据",
-        "description": "两步配置：\n① **tgt**——登录票据（会过期，**必须是小京鱼 App 的** tgt）；\n② **设备身份**——device_id 或 android_id 二选一（首选 device_id；部分机型读不到 android_id，而 device_id = md5(android_id)，是同一个值）。\n\n发现走 gw.smart 轻量接口，**无需彩虹网关参数**。\n\n可选增强：填 **pin + jmafinger**（均来自 App Cookie）即启用完整物模型（风扇风速/模式、数值档位、只读电气量区分）；不填则只生成开关（Power）+ 传感器。\n\n其余参数走默认值，可在「选项 → 高级设置」调。同一手机可加多个账号（以 pin 或家庭区分）。",
+        "description": "只需两项：\n① **tgt**——登录票据（会过期，**必须是小京鱼 App 的** tgt）；\n② **device_id**——直接粘贴抓包/curl 里的 device_id（如 `b0b57721-…` 这种 UUID 即可：它不进签名、服务端不严格校验，**不用 md5/android_id**）。\n\n发现走 gw.smart 轻量接口，**不需要 jmafinger/pin/eid 等彩虹参数**；机型/版本等 App 档走默认值。\n\n想要完整物模型（风扇档位/模式等），装好后到「选项 → 高级设置」补 pin + jmafinger。同一手机可加多个账号（以家庭区分）。",
         "data": {
           "tgt": "tgt（登录票据，会过期；小京鱼 App）",
-          "device_id": "device_id（首选；= md5(android_id)）",
-          "android_id": "android_id（Settings.Secure.ANDROID_ID，16 位 hex；或改填 device_id）",
-          "color_pin": "color_pin（可选；与 jmafinger 一起填才有完整档位）",
-          "color_jmafinger": "color_jmafinger（可选；Cookie 的 UUID）"
+          "device_id": "device_id（粘贴抓包/curl 里的，UUID 即可）"
         }
       },
       "houses": {
@@ -24,7 +21,7 @@
       }
     },
     "error": {
-      "need_identity": "请填 device_id 或 android_id（至少一个）。首选 device_id——它就是 md5(android_id)。",
+      "need_identity": "请填 device_id（直接粘贴抓包/curl 里的，UUID 即可）。若你只有 android_id，可去「高级设置」填，系统会自动算。",
       "cannot_connect": "发现失败：{detail}。多为 tgt 过期或网络问题——请确认 tgt 是小京鱼 App 的最新值。",
       "eid_fetch_failed": "获取 eid 失败：{detail}。可手动填一个 eid，或检查设备身份/网络。"
     },
@@ -49,13 +46,10 @@
       },
       "credentials": {
         "title": "更新凭据",
-        "description": "更新这些（tgt 最容易过期）：tgt 登录票据、设备身份（device_id 或 android_id 二选一，首选 device_id）。可选的 pin + jmafinger 一起填了才有完整物模型（风扇档位/模式等）。其余参数不变；要改 seg1/key/机型/eid/间隔 请用「高级设置」。改完若设备有变动，再点「重新发现设备」。",
+        "description": "更新这两项（tgt 最容易过期）：tgt 登录票据、device_id（粘贴抓包/curl 里的，UUID 即可）。android_id（备选身份）与 pin/jmafinger（完整物模型增强）都在「高级设置」里改。改完若设备有变动，再点「重新发现设备」。",
         "data": {
           "tgt": "tgt（登录票据，会过期；小京鱼 App）",
-          "device_id": "device_id（首选；= md5(android_id)）",
-          "android_id": "android_id（16 位 hex；或改填 device_id）",
-          "color_pin": "color_pin（可选；与 jmafinger 一起填才有完整档位）",
-          "color_jmafinger": "color_jmafinger（可选；Cookie 的 UUID）"
+          "device_id": "device_id（粘贴抓包/curl 里的，UUID 即可）"
         }
       },
       "settings": {

@@ -58,16 +58,10 @@ def _load_devices(entry: ConfigEntry) -> list[dict]:
     resolved = _device_id_for(_merged(entry))
     for d in devices:
         d["device_id"] = resolved or d.get("device_id")
-    # 启动即暴露运行时 device_id：状态/控制都靠它。若不像 md5(android_id)（32 位十六进制、
-    # 无连字符），多半是误把 App 安装 UUID（gw 接口里那种 a95d…-…）填进了 device_id 字段。
+    # device_id 只是设备标识：不进签名、服务端不严格校验——抓包里的安装 UUID（如 b0b57721-…）、
+    # md5(android_id) 都行。鉴权靠 tgt。启动打印出来便于排查（空才是问题）。
     did = (devices[0].get("device_id") if devices else "") or ""
-    _LOGGER.info("加载 %d 台设备，smart device_id=%s", len(devices), did or "(空)")
-    if did and (len(did) != 32 or "-" in did):
-        _LOGGER.warning(
-            "device_id=%s 不像 md5(android_id)（应为 32 位十六进制、无连字符）。api.smart 的状态/控制"
-            "需要这个值——别把 App 安装 UUID 填进 device_id 字段；留空改用 android_id，或填 md5(android_id)。",
-            did,
-        )
+    _LOGGER.info("加载 %d 台设备，device_id=%s", len(devices), did or "(空)")
     return devices
 
 

@@ -3,13 +3,10 @@
     "step": {
       "user": {
         "title": "JD Smart (小京鱼) — Account credentials",
-        "description": "Two steps:\n① **tgt** — login ticket (expires; must be the JD IoT '小京鱼' app's tgt);\n② **device identity** — fill device_id OR android_id (prefer device_id; some phones can't read android_id, and device_id = md5(android_id), the same value).\n\nDiscovery uses the lightweight gw.smart endpoints — **no rainbow-gateway params needed**.\n\nOptional enhancement: fill **pin + jmafinger** (from the app cookie) to enable the full device model (fan speed/mode, numeric steps, read-only electrical streams); without them you only get an on/off (Power) switch + sensors.\n\nAll other params use defaults — tweak under Options → Advanced. The same phone can hold multiple accounts (told apart by pin or home).",
+        "description": "Just two things:\n① **tgt** — login ticket (expires; must be the JD IoT '小京鱼' app's tgt);\n② **device_id** — paste the device_id straight from your captured request/curl (a UUID like `b0b57721-…` is fine; it isn't signed and the server doesn't strictly validate it, so **no md5/android_id needed**).\n\nDiscovery uses the lightweight gw.smart endpoints — **no jmafinger/pin/eid (rainbow) params needed**; model/version app params use defaults.\n\nFor the full device model (fan steps/mode, etc.), after install go to Options → Advanced and add pin + jmafinger. The same phone can hold multiple accounts (told apart by home).",
         "data": {
           "tgt": "tgt (login ticket, expires; JD IoT app)",
-          "device_id": "device_id (preferred; = md5(android_id))",
-          "android_id": "android_id (Settings.Secure.ANDROID_ID, 16hex; or fill device_id instead)",
-          "color_pin": "color_pin (optional; with jmafinger enables the full model)",
-          "color_jmafinger": "color_jmafinger (optional; cookie UUID)"
+          "device_id": "device_id (paste from your captured request/curl; a UUID is fine)"
         }
       },
       "houses": {
@@ -24,7 +21,7 @@
       }
     },
     "error": {
-      "need_identity": "Fill device_id or android_id (at least one). Prefer device_id — it equals md5(android_id).",
+      "need_identity": "Fill device_id (paste it from your captured request/curl — a UUID is fine). If you only have android_id, set it under Advanced and it will be derived automatically.",
       "cannot_connect": "Discovery failed: {detail}. Usually an expired tgt or a network issue — make sure tgt is the latest value from the JD IoT app.",
       "eid_fetch_failed": "Failed to fetch eid: {detail}. Enter an eid manually, or check the device identity/network."
     },
@@ -49,13 +46,10 @@
       },
       "credentials": {
         "title": "Update credentials",
-        "description": "Update these (tgt expires most often): tgt login ticket and the device identity — device_id or android_id (fill either, prefer device_id). Optional pin + jmafinger (fill both) unlock the full device model (fan steps/mode, etc.). Everything else stays unchanged; to edit seg1/key/model/eid/interval use Advanced. After updating, run Re-discover if your devices changed.",
+        "description": "Update these two (tgt expires most often): tgt login ticket and device_id (paste from your captured request/curl; a UUID is fine). android_id (alternative identity) and pin/jmafinger (full-model enhancement) live under Advanced. After updating, run Re-discover if your devices changed.",
         "data": {
           "tgt": "tgt (login ticket, expires; JD IoT app)",
-          "device_id": "device_id (preferred; = md5(android_id))",
-          "android_id": "android_id (16hex; or fill device_id instead)",
-          "color_pin": "color_pin (optional; with jmafinger enables the full model)",
-          "color_jmafinger": "color_jmafinger (optional; cookie UUID)"
+          "device_id": "device_id (paste from your captured request/curl; a UUID is fine)"
         }
       },
       "settings": {

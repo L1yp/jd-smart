@@ -84,8 +84,7 @@ class JdSmartCoordinator(DataUpdateCoordinator):
                     # 打出 device_id/feed_id/错误，便于定位"无法获取状态"。
                     _LOGGER.warning(
                         "设备 %s 快照业务失败 status=%s error=%s（device_id=%s feed_id=%s）。"
-                        "状态与控制都依赖它——核对：tgt 是否过期、device_id 是否为 md5(android_id)"
-                        "（不是 App 的安装 UUID）、feed_id 是否正确。",
+                        "核对：tgt 是否过期（最常见，重新抓小京鱼 App 的 tgt）、feed_id 是否正确。",
                         dev.get("name", feed_id), snap.get("api_status"), snap.get("error"),
                         dev.get("device_id"), feed_id,
                     )
@@ -175,7 +174,7 @@ class JdSmartCoordinator(DataUpdateCoordinator):
             # 控制接口业务失败：不抛异常，UI 会以为成功但设备没动（"控制不对"）。打出来便于排查。
             _LOGGER.warning(
                 "控制设备 %s 业务失败 status=%s error=%s（device_id=%s feed_id=%s commands=%s）。"
-                "核对 device_id 是否为 md5(android_id)、tgt 是否过期、feed_id/stream_id 是否正确。",
+                "核对：tgt 是否过期、feed_id/stream_id 是否正确。",
                 dev.get("name", dev.get("feed_id")), parsed.get("api_status"), parsed.get("error"),
                 dev.get("device_id"), dev.get("feed_id"), commands,
             )
