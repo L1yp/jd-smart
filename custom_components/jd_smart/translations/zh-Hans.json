@@ -3,10 +3,14 @@
     "step": {
       "user": {
         "title": "小京鱼 JD Smart —— 账号凭据",
-        "description": "只需两项：\n① **tgt**——登录票据（会过期，**必须是小京鱼 App 的** tgt）；\n② **device_id**——直接粘贴抓包/curl 里的 device_id（如 `b0b57721-…` 这种 UUID 即可：它不进签名、服务端不严格校验，**不用 md5/android_id**）。\n\n发现、快照、控制、**完整物模型**全走 gw/api.smart 同一套签名，**不需要 jmafinger/pin/eid 等彩虹参数**；机型/版本等 App 档走默认值。\n\n风扇档位/模式、数值控制等完整档位会**自动获取**，无需额外凭据。同一手机可加多个账号（以家庭区分）。",
+        "description": "首屏需要：\n① **tgt**——登录票据（会过期，**必须是小京鱼 App 的** tgt）；\n② **device_id**——直接粘贴抓包/curl 里的（如 `b0b57721-…` UUID 即可：不进签名、服务端不严格校验，**不用 md5/android_id**）；\n③ **App 档**（机型/版本）——hard_platform / app_version / plat_version / plat。\n\n⚠️ **App 档会进签名，必须与你抓包的那台设备一致**：已填默认值，但若你抓包的设备机型/版本不同，请改成你自己的——用与 tgt 绑定设备不符的档位签名，服务端会判设备指纹对不上，**有风控/封号风险**。channel（较固定）和 android_id（device_id 备选）在「高级设置」。\n\n发现、快照、控制、完整物模型全走同一套签名，**不需要 jmafinger/pin/eid 等彩虹参数**。同一手机可加多个账号（以家庭区分）。",
         "data": {
           "tgt": "tgt（登录票据，会过期；小京鱼 App）",
-          "device_id": "device_id（粘贴抓包/curl 里的，UUID 即可）"
+          "device_id": "device_id（粘贴抓包/curl 里的，UUID 即可）",
+          "hard_platform": "hard_platform（设备机型，如 HWI-AL00；改成你抓包的）",
+          "app_version": "app_version（小京鱼 App 版本，如 7.3.0；改成你抓包的）",
+          "plat_version": "plat_version（Android 版本，如 9；改成你抓包的）",
+          "plat": "plat（平台，一般 Android）"
         }
       },
       "houses": {
@@ -45,10 +49,14 @@
       },
       "credentials": {
         "title": "更新凭据",
-        "description": "更新这两项（tgt 最容易过期）：tgt 登录票据、device_id（粘贴抓包/curl 里的，UUID 即可）。完整物模型自动获取，无需额外凭据；android_id（备选身份）在「高级设置」里改。改完若设备有变动，再点「重新发现设备」。",
+        "description": "更新登录/签名相关项（tgt 最容易过期）。\n\n⚠️ **App 档（机型/版本）会进签名，必须与你抓包的那台设备一致**，否则与 tgt 绑定设备不符有风控/封号风险。device_id 粘贴抓包/curl 里的 UUID 即可（不进签名）；android_id（备选身份）在「高级设置」。改完若设备有变动，再点「重新发现设备」。",
         "data": {
           "tgt": "tgt（登录票据，会过期；小京鱼 App）",
-          "device_id": "device_id（粘贴抓包/curl 里的，UUID 即可）"
+          "device_id": "device_id（粘贴抓包/curl 里的，UUID 即可）",
+          "hard_platform": "hard_platform（设备机型，如 HWI-AL00；改成你抓包的）",
+          "app_version": "app_version（小京鱼 App 版本，如 7.3.0；改成你抓包的）",
+          "plat_version": "plat_version（Android 版本，如 9；改成你抓包的）",
+          "plat": "plat（平台，一般 Android）"
         }
       },
       "settings": {

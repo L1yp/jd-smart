@@ -81,16 +81,25 @@ def _with_defaults(data: dict) -> dict:
 
 
 def _credentials_schema(cfg: dict | None = None) -> vol.Schema:
-    """主表单只需 tgt + device_id（直接粘贴抓包/curl 里的 device_id，UUID 即可——它不进
-    签名、服务端不严格校验）。首次安装步 user / 选项 credentials 共用。
+    """主表单：tgt + device_id + **App 档（机型/版本，进签名）**。首次安装步 user / 选项 credentials 共用。
 
-    android_id（没有 device_id 时的备选身份）与 pin/jmafinger（可选的完整物模型增强：填了
-    才走彩虹 getDeviceDetails 拿风扇档位/模式等）都挪到「高级设置」，这里保持最小。"""
+    App 档 hard_platform/app_version/plat_version/plat **进签名**——device_md =
+    md5("Android"+app_version+hard_platform+plat_version+":"+当年第几天)，且这些值同时进 query。
+    **必须与你抓包那台设备一致**：用与 tgt 绑定设备不符的档位签名，服务端会判设备指纹对不上 →
+    风控/封号。故放首屏、给默认值、允许改。device_id 不进签名、服务端不严格校验（UUID 即可）。
+    channel（较固定 xjgw-android）与 android_id（device_id 的备选身份）仍在「高级设置」。"""
     cfg = cfg or {}
     return vol.Schema(
         {
             vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
             vol.Optional(CONF_DEVICE_ID, default=cfg.get(CONF_DEVICE_ID, "")): str,
+            vol.Required(CONF_HARD_PLATFORM,
+                         default=cfg.get(CONF_HARD_PLATFORM, DEFAULT_HARD_PLATFORM)): str,
+            vol.Required(CONF_APP_VERSION,
+                         default=cfg.get(CONF_APP_VERSION, DEFAULT_APP_VERSION)): str,
+            vol.Required(CONF_PLAT_VERSION,
+                         default=cfg.get(CONF_PLAT_VERSION, DEFAULT_PLAT_VERSION)): str,
+            vol.Required(CONF_PLAT, default=cfg.get(CONF_PLAT, DEFAULT_PLAT)): str,
         }
     )
 

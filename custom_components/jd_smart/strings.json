@@ -3,10 +3,14 @@
     "step": {
       "user": {
         "title": "JD Smart (小京鱼) — Account credentials",
-        "description": "Just two things:\n① **tgt** — login ticket (expires; must be the JD IoT '小京鱼' app's tgt);\n② **device_id** — paste the device_id straight from your captured request/curl (a UUID like `b0b57721-…` is fine; it isn't signed and the server doesn't strictly validate it, so **no md5/android_id needed**).\n\nDiscovery, snapshots, control and the **full device model** all use the same gw/api.smart signing — **no jmafinger/pin/eid (rainbow) params needed**; model/version app params use defaults.\n\nThe full model (fan speeds/mode, numeric controls) is fetched **automatically** — no extra credentials. The same phone can hold multiple accounts (told apart by home).",
+        "description": "On this screen:\n① **tgt** — login ticket (expires; must be the JD IoT '小京鱼' app's tgt);\n② **device_id** — paste it from your captured request/curl (a UUID like `b0b57721-…` is fine; not signed, not strictly validated, **no md5/android_id needed**);\n③ **App profile** — hard_platform / app_version / plat_version / plat.\n\n⚠️ **The App profile goes into the request signature and MUST match the device you captured from.** Defaults are pre-filled, but if your captured device's model/version differs, change them — signing with a profile that doesn't match the device bound to your tgt makes the device fingerprint mismatch and risks **risk-control / account ban**. channel (fairly fixed) and android_id (device_id alternative) live under Advanced.\n\nDiscovery, snapshot, control and the full model all use the same signing — **no jmafinger/pin/eid (rainbow) params**. One phone can hold multiple accounts (told apart by home).",
         "data": {
           "tgt": "tgt (login ticket, expires; JD IoT app)",
-          "device_id": "device_id (paste from your captured request/curl; a UUID is fine)"
+          "device_id": "device_id (paste from your captured request/curl; a UUID is fine)",
+          "hard_platform": "hard_platform (your device model, e.g. HWI-AL00; set to your capture)",
+          "app_version": "app_version (your JD IoT app version, e.g. 7.3.0; set to your capture)",
+          "plat_version": "plat_version (your Android version, e.g. 9; set to your capture)",
+          "plat": "plat (platform, usually Android)"
         }
       },
       "houses": {
@@ -45,10 +49,14 @@
       },
       "credentials": {
         "title": "Update credentials",
-        "description": "Update these two (tgt expires most often): tgt login ticket and device_id (paste from your captured request/curl; a UUID is fine). The full model is fetched automatically — no extra credentials; android_id (alternative identity) lives under Advanced. After updating, run Re-discover if your devices changed.",
+        "description": "Update login/signing values (tgt expires most often).\n\n⚠️ **The App profile (model/version) goes into the signature and MUST match the device you captured from** — a mismatch with the device bound to your tgt risks risk-control / account ban. device_id is a UUID pasted from your capture (not signed). android_id (alternative identity) lives under Advanced. After updating, run Re-discover if your devices changed.",
         "data": {
           "tgt": "tgt (login ticket, expires; JD IoT app)",
-          "device_id": "device_id (paste from your captured request/curl; a UUID is fine)"
+          "device_id": "device_id (paste from your captured request/curl; a UUID is fine)",
+          "hard_platform": "hard_platform (your device model, e.g. HWI-AL00; set to your capture)",
+          "app_version": "app_version (your JD IoT app version, e.g. 7.3.0; set to your capture)",
+          "plat_version": "plat_version (your Android version, e.g. 9; set to your capture)",
+          "plat": "plat (platform, usually Android)"
         }
       },
       "settings": {
