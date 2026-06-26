@@ -21,6 +21,8 @@ from .const import (
     ATTR_VALUE,
     CONF_APP_VERSION,
     CONF_CHANNEL,
+    CONF_COLOR_JMAFINGER,
+    CONF_COLOR_PIN,
     CONF_COLOR_SIGN_SECRET,
     CONF_DEVICES,
     CONF_HARD_PLATFORM,
@@ -116,27 +118,39 @@ def _client_from_entry(hass: HomeAssistant, entry: ConfigEntry) -> JdSmartClient
 
 
 async def _async_fetch_models(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
-    """用彩虹客户端拉各设备物模型（jdsmart.device.getDeviceDetails）。
+    """拉各设备「可控流物模型」，供 switch/select/number 建实体。
 
-    复用 config_flow 的彩虹客户端构建 + eid 解析；任何一步失败都静默跳过，
-    实体退回 card_meta 派生（不阻断 setup）。物模型只在此拉一次（静态元数据）。
+    两条来源（gw 发现 + 可选彩虹增强）：
+    - 填了彩虹 pin+jmafinger(+sign_secret) + 设备身份 → 走 getDeviceDetails 拿**完整**档位
+      （风扇风速/模式、数值范围、只读传感器区分）；
+    - 否则用 gw 发现阶段的 card_meta 降级（card_control 通常只标 Power → 只生成 Power 开关）。
+    **两种情况都会调用 coordinator.async_fetch_models**（card_meta 兜底也要建可控实体），
+    彩虹任何一步失败都只记日志、不阻断。物模型只在此拉一次（静态元数据）。
     """
     # 局部导入：避免 __init__ 顶层依赖 config_flow（HA 加载顺序更稳）
     from .config_flow import _async_resolve_eid, _build_color_client, _has_identity
 
     cfg = _merged(entry)
-    if not cfg.get(CONF_COLOR_SIGN_SECRET) or not _has_identity(cfg):
-        return  # 旧条目没填彩虹凭据/设备身份：跳过
-    try:
-        eid, err = await _async_resolve_eid(hass, cfg)
-        if err or not eid:
-            _LOGGER.debug("物模型抓取跳过：eid 解析失败 %s", err)
-            return
-        color_client = _build_color_client(hass, cfg, eid)
-    except Exception as err:  # noqa: BLE001  发现链路任何异常都不应拖垮 setup
-        _LOGGER.debug("物模型抓取跳过：彩虹客户端构建失败 %s", err)
-        return
-    await coordinator.async_fetch_models(color_client)
+    color_client = None
+    has_color = bool(
+        _has_identity(cfg) and cfg.get(CONF_COLOR_SIGN_SECRET)
+        and cfg.get(CONF_COLOR_PIN) and cfg.get(CONF_COLOR_JMAFINGER)
+    )
+    if has_color:
+        try:
+            eid, err = await _async_resolve_eid(hass, cfg)
+            if err or not eid:
+                _LOGGER.info("物模型增强跳过：eid 解析失败 %s（改用 gw card_meta 降级）", err)
+            else:
+                color_client = _build_color_client(hass, cfg, eid)
+        except Exception as err:  # noqa: BLE001  增强链路任何异常都不应拖垮 setup
+            _LOGGER.info("物模型增强跳过：彩虹客户端构建失败 %s（改用 gw card_meta 降级）", err)
+    else:
+        _LOGGER.info(
+            "未配置彩虹 pin/jmafinger，物模型用 gw 发现的 card_meta（通常仅 Power 可控）；"
+            "要完整档位/数值控制，请在「选项 → 更新凭据」补填 pin + jmafinger"
+        )
+    await coordinator.async_fetch_models(color_client)  # color_client=None → card_meta 降级
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -301,8 +315,12 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if entry is None:
             raise HomeAssistantError("找不到该设备所属配置条目")
         cfg = _merged(entry)
-        if not cfg.get(CONF_COLOR_SIGN_SECRET) or not _has_identity(cfg):
-            raise HomeAssistantError("缺少彩虹凭据(color_sign_secret)或设备身份(device_id/android_id)，无法查询物模型")
+        if not (_has_identity(cfg) and cfg.get(CONF_COLOR_SIGN_SECRET)
+                and cfg.get(CONF_COLOR_PIN) and cfg.get(CONF_COLOR_JMAFINGER)):
+            raise HomeAssistantError(
+                "该诊断需彩虹凭据(color_sign_secret/pin/jmafinger)+设备身份(device_id/android_id)；"
+                "gw 发现模式下若未配置 pin/jmafinger，物模型只能用 card_meta（仅 Power）"
+            )
         eid, err = await _async_resolve_eid(hass, cfg)
         if err or not eid:
             raise HomeAssistantError(f"eid 解析失败: {err}")

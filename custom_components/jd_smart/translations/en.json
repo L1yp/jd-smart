@@ -3,13 +3,13 @@
     "step": {
       "user": {
         "title": "JD Smart (小京鱼) — Account credentials",
-        "description": "Each JD account needs 3 required fields (captured from the app): tgt login ticket (expires), jmafinger and pin from the cookie. Plus a device identity — fill device_id OR android_id (prefer device_id; some phones can't read android_id, and device_id = md5(android_id), the same value). All other app/device params use defaults — tweak them later under Options → Advanced.\n\nThe same phone can hold multiple accounts; they are distinguished by pin.",
+        "description": "Two steps:\n① **tgt** — login ticket (expires; must be the JD IoT '小京鱼' app's tgt);\n② **device identity** — fill device_id OR android_id (prefer device_id; some phones can't read android_id, and device_id = md5(android_id), the same value).\n\nDiscovery uses the lightweight gw.smart endpoints — **no rainbow-gateway params needed**.\n\nOptional enhancement: fill **pin + jmafinger** (from the app cookie) to enable the full device model (fan speed/mode, numeric steps, read-only electrical streams); without them you only get an on/off (Power) switch + sensors.\n\nAll other params use defaults — tweak under Options → Advanced. The same phone can hold multiple accounts (told apart by pin or home).",
         "data": {
-          "tgt": "tgt (login ticket, expires)",
-          "color_jmafinger": "color_jmafinger (cookie UUID)",
-          "color_pin": "color_pin (cookie pin, account id)",
+          "tgt": "tgt (login ticket, expires; JD IoT app)",
           "device_id": "device_id (preferred; = md5(android_id))",
-          "android_id": "android_id (Settings.Secure.ANDROID_ID, 16hex; or fill device_id instead)"
+          "android_id": "android_id (Settings.Secure.ANDROID_ID, 16hex; or fill device_id instead)",
+          "color_pin": "color_pin (optional; with jmafinger enables the full model)",
+          "color_jmafinger": "color_jmafinger (optional; cookie UUID)"
         }
       },
       "houses": {
@@ -25,10 +25,11 @@
     },
     "error": {
       "need_identity": "Fill device_id or android_id (at least one). Prefer device_id — it equals md5(android_id).",
+      "cannot_connect": "Discovery failed: {detail}. Usually an expired tgt or a network issue — make sure tgt is the latest value from the JD IoT app.",
       "eid_fetch_failed": "Failed to fetch eid: {detail}. Enter an eid manually, or check the device identity/network."
     },
     "abort": {
-      "already_configured": "This JD account (pin) is already configured. Don't add the same account twice; use a different pin for another account.",
+      "already_configured": "This account is already configured (matched by pin or home). Don't add the same account twice.",
       "cannot_connect": "Discovery failed (network / risk control / credentials). Check tgt and retry.",
       "no_houses": "No homes returned for this account.",
       "no_devices": "No devices found in the selected homes."
@@ -39,7 +40,7 @@
       "init": {
         "title": "JD Smart options",
         "menu_options": {
-          "credentials": "Update credentials (tgt/jmafinger/pin/device_id)",
+          "credentials": "Update credentials (tgt / identity / optional pin+jmafinger)",
           "rediscover": "Re-discover devices",
           "streams": "Edit sensors / units",
           "settings": "Advanced (all parameters)",
@@ -48,18 +49,18 @@
       },
       "credentials": {
         "title": "Update credentials",
-        "description": "Update these fields (tgt expires most often): tgt login ticket, jmafinger/pin (cookie), and the device identity — device_id or android_id (fill either, prefer device_id). Everything else stays unchanged; to edit seg1/key/model/eid/interval use Advanced. After updating, run Re-discover if your devices changed.",
+        "description": "Update these (tgt expires most often): tgt login ticket and the device identity — device_id or android_id (fill either, prefer device_id). Optional pin + jmafinger (fill both) unlock the full device model (fan steps/mode, etc.). Everything else stays unchanged; to edit seg1/key/model/eid/interval use Advanced. After updating, run Re-discover if your devices changed.",
         "data": {
-          "tgt": "tgt (login ticket, expires)",
-          "color_jmafinger": "color_jmafinger (cookie UUID)",
-          "color_pin": "color_pin (cookie pin, account id)",
+          "tgt": "tgt (login ticket, expires; JD IoT app)",
           "device_id": "device_id (preferred; = md5(android_id))",
-          "android_id": "android_id (16hex; or fill device_id instead)"
+          "android_id": "android_id (16hex; or fill device_id instead)",
+          "color_pin": "color_pin (optional; with jmafinger enables the full model)",
+          "color_jmafinger": "color_jmafinger (optional; cookie UUID)"
         }
       },
       "settings": {
         "title": "Advanced (all parameters)",
-        "description": "Rainbow color_* discovers devices; seg1/key poll snapshots; device_id (or android_id) derives aid/uuid; leave eid empty to auto-fetch. Upgrading from the old version: fill the color_* and device_id/android_id fields here, then run Re-discover.",
+        "description": "Discovery uses gw (only tgt + device identity); seg1/key poll snapshots/control; pin/jmafinger/color_sign_secret are optional — fill them to fetch the full model via rainbow getDeviceDetails; device_id (or android_id) is the device id; leave eid empty to auto-fetch. Upgrading: fill tgt and (optionally) pin/jmafinger here, then run Re-discover.",
         "data": {
           "color_sign_secret": "color_sign_secret (rainbow HMAC key)",
           "color_pin": "color_pin (cookie pin)",
@@ -105,7 +106,7 @@
       "cannot_connect": "Discovery failed. Check tgt and retry.",
       "no_houses": "No homes returned for this account.",
       "no_devices": "No devices cached. Use Re-discover first.",
-      "missing_device_config": "Missing color_* credentials or device identity (device_id/android_id). Open 'Update credentials' (or Advanced) and fill them first."
+      "missing_device_config": "Missing tgt or device identity (device_id/android_id). Open 'Update credentials' (or Advanced) and fill them first."
     }
   },
   "services": {

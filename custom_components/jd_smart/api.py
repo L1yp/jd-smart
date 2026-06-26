@@ -18,10 +18,16 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-try:
-    from .const import API_BASE, CONTROL_PATH, SNAPSHOT_PATH  # 包内（HA 运行时）
+try:                                                          # 包内（HA 运行时）
+    from .const import (
+        API_BASE, CONTROL_PATH, GW_API_BASE, GW_DEVICES_PATH,
+        GW_HOUSES_PATH, SNAPSHOT_PATH,
+    )
 except ImportError:                                            # 直接 `python api.py` 跑自检
-    from const import API_BASE, CONTROL_PATH, SNAPSHOT_PATH    # 脚本目录已在 sys.path
+    from const import (                                        # 脚本目录已在 sys.path
+        API_BASE, CONTROL_PATH, GW_API_BASE, GW_DEVICES_PATH,
+        GW_HOUSES_PATH, SNAPSHOT_PATH,
+    )
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +65,93 @@ def parse_snapshot(raw: dict) -> dict:
         "streams": streams,
         "raw": raw,
     }
+
+
+# ====================== gw.smart.jd.com 轻量发现解析 —— 纯函数 ======================
+def parse_houses_gw(raw: dict) -> list[dict]:
+    """gw getHousesAndRooms → [{house_id, house_name, rooms}]。
+
+    响应 result 是**数组**：每项含 house_id/house_name/rooms[{room_id,room_name}]。
+    rooms 拍平成 {room_name: room_id} 备用——设备列表里部分设备只带 room_name 不带 room_id，
+    回头用它补 room_id（getDeviceDetails 物模型请求要 roomId）。「默认房间」room_id 可能为 null。
+    """
+    result = raw.get("result") if isinstance(raw, dict) else None
+    if isinstance(result, str):  # 稳妥：个别接口 result 可能是字符串
+        try:
+            result = json.loads(result)
+        except ValueError:
+            result = None
+    houses: list[dict] = []
+    for h in result or []:
+        if not isinstance(h, dict):
+            continue
+        hid = h.get("house_id")
+        if hid is None:
+            continue
+        rooms: dict = {}
+        for r in h.get("rooms") or []:
+            if isinstance(r, dict) and r.get("room_name"):
+                rooms[r["room_name"]] = r.get("room_id")
+        houses.append({
+            "house_id": str(hid),
+            "house_name": h.get("house_name") or str(hid),
+            "rooms": rooms,
+        })
+    return houses
+
+
+def parse_devices_gw(raw: dict, *, house_id=None, room_map: dict | None = None,
+                     requester_device_id: str | None = None) -> list[dict]:
+    """gw getDevicesAndCategory → 拍平设备列表（结构与 color_api.parse_device_list 对齐）。
+
+    响应 result 是 **JSON 字符串**（需二次解析），内层 platform_list[].cards[] 是设备卡片。
+    卡片的 card_desc/card_control/snapshot 字段形状与彩虹 smartInfo 同源，故直接复用 build_card_meta。
+    部分卡片不带 room_id（如「默认房间」），用 house 的 room_map 按 room_name 回填，供 getDeviceDetails。
+    """
+    try:
+        from .color_api import build_card_meta  # 与彩虹同源的卡片复合（纯函数，无 aiohttp）
+    except ImportError:
+        from color_api import build_card_meta
+
+    res = raw.get("result") if isinstance(raw, dict) else None
+    if isinstance(res, str):
+        try:
+            res = json.loads(res)
+        except ValueError:
+            res = {}
+    if not isinstance(res, dict):
+        res = {}
+    room_map = room_map or {}
+    out: list[dict] = []
+    for plat in res.get("platform_list") or []:
+        for card in plat.get("cards") or []:
+            if not isinstance(card, dict):
+                continue
+            feed_id = card.get("feed_id")
+            if feed_id is None:
+                continue
+            room_name = card.get("room_name")
+            room_id = card.get("room_id")
+            if room_id is None and room_name in room_map:
+                room_id = room_map.get(room_name)
+            snap = card.get("snapshot") or {}
+            out.append({
+                "feed_id": feed_id,
+                "device_id": requester_device_id,
+                "hw_device_id": card.get("device_id"),
+                "name": card.get("card_name") or card.get("cname")
+                        or (str(feed_id) if feed_id is not None else ""),
+                "room": room_name,
+                "room_id": room_id,
+                "house_id": str(house_id) if house_id is not None else None,
+                "category": card.get("category_name") or card.get("cname"),
+                "sku": card.get("sku"),
+                "product_id": card.get("product_id"),
+                "streams": list(snap.keys()),
+                "snapshot": snap,
+                "card_meta": build_card_meta(card),
+            })
+    return out
 
 
 # ====================== 设备物模型（getDeviceDetails）解析 —— 纯函数 ======================
@@ -329,16 +422,17 @@ class JdSmartClient:
             "user-agent": "okhttp/4.10.0",
         }
 
-    async def _post(self, path: str, device_id: str, body: str) -> dict:
+    async def _post(self, path: str, device_id: str, body: str, *, base: str | None = None) -> dict:
         """统一发包：同一套签名，发送被签名的原始字节（不能让框架重新序列化）。
 
-        getDeviceSnapshot / getDeviceDetails / controlDevice 共用——同主机、同 path 前缀、
-        同 postjson_body 签名，只差 path 与 body。
+        getDeviceSnapshot / controlDevice（api.smart）与 getHousesAndRooms /
+        getDevicesAndCategory（gw.smart）共用——同一套 postjson_body 签名，只差 base/path 与 body。
+        base 缺省 api.smart；gw 接口传 GW_API_BASE。
         """
         import aiohttp  # 惰性导入：离线只用签名/解析/自检时零三方依赖
 
         ts = self.now_ts()
-        url = API_BASE + path
+        url = (base or API_BASE) + path
         try:
             async with self._session.post(
                 url,
@@ -359,6 +453,17 @@ class JdSmartClient:
 
     async def get_device_snapshot(self, device_id: str, feed_id) -> dict:
         return await self._post(SNAPSHOT_PATH, device_id, self.build_body(feed_id))
+
+    # ---- gw.smart.jd.com 轻量发现（不走彩虹；同一套签名，仅换 base/path/body）----
+    async def get_houses_and_rooms(self, device_id: str, body: dict | None = None) -> dict:
+        """家庭+房间。body 缺省 {}（列该账号全部家庭）。解析见 parse_houses_gw。"""
+        payload = json.dumps(body or {}, separators=(",", ":"), ensure_ascii=False)
+        return await self._post(GW_HOUSES_PATH, device_id, payload, base=GW_API_BASE)
+
+    async def get_devices_and_category(self, device_id: str, house_id) -> dict:
+        """某家庭的设备+类目。body {"houseId":"<str>"}。解析见 parse_devices_gw。"""
+        payload = json.dumps({"houseId": str(house_id)}, separators=(",", ":"), ensure_ascii=False)
+        return await self._post(GW_DEVICES_PATH, device_id, payload, base=GW_API_BASE)
 
     # 注：设备物模型(getDeviceDetails)是**彩虹网关** functionId jdsmart.device.getDeviceDetails，
     # 不在本(smart api)客户端，见 color_api.JdColorClient.get_device_details。
@@ -458,6 +563,47 @@ def selftest() -> bool:
     cm_model = model_from_card_meta(dev)
     check("card_meta 降级仅含可控流",
           set(cm_model) == {"Power"} and control_kind(cm_model["Power"]) == "switch")
+
+    # 5) gw 轻量发现解析（结构取自真实抓包：result 数组 / result 字符串、card 同 smartInfo）
+    houses = parse_houses_gw({"status": 0, "error": None, "result": [
+        {"house_id": 1388207, "house_name": "我的家", "rooms": [
+            {"room_id": 3875794, "room_name": "客厅"},
+            {"room_id": None, "room_name": "默认房间"}]}]})
+    check("gw 家庭解析 house_id/house_name",
+          len(houses) == 1 and houses[0]["house_id"] == "1388207"
+          and houses[0]["house_name"] == "我的家")
+    check("gw 房间拍平 room_name->room_id（默认房间 None）",
+          houses[0]["rooms"] == {"客厅": 3875794, "默认房间": None})
+
+    devices_inner = (
+        '{"platform_list":[{"cards":['
+        '{"category_name":"电风扇","device_id":"34EAE780ABA0","feed_id":576841753861489755,'
+        '"room_name":"默认房间","product_id":177800004,"card_name":"卧室电风扇",'
+        '"card_desc":[{"stream_id":"Mode","options":[{"0":"普通模式"},{"1":"智能模式"}],"stream_text":"当前模式"}],'
+        '"snapshot":{"Wind":"7","Mode":"0","Power":"0"},'
+        '"card_control":[{"stream_id":"Power","options":[{"0":"关"},{"1":"开"}]}]},'
+        '{"room_id":3875794,"category_name":"插座","device_id":"EC0BAE3A8374",'
+        '"feed_id":563221780494556020,"room_name":"客厅","card_name":"北卧空调","card_desc":[],'
+        '"snapshot":{"Voltage":"231536","Power":"1"},'
+        '"card_control":[{"stream_id":"Power","options":[{"0":"关"},{"1":"开"}]}]}]}]}')
+    devs = parse_devices_gw({"status": 0, "error": None, "result": devices_inner},
+                            house_id="1388207", room_map=houses[0]["rooms"],
+                            requester_device_id="PHONEDID")
+    check("gw 设备解析出 2 台（result 字符串二次解析）", len(devs) == 2)
+    fan = next((d for d in devs if str(d["feed_id"]) == "576841753861489755"), {})
+    check("gw 风扇 feed_id 大整数不丢精度 + name/hw_device_id/house_id",
+          fan.get("feed_id") == 576841753861489755 and fan.get("name") == "卧室电风扇"
+          and fan.get("hw_device_id") == "34EAE780ABA0" and fan.get("house_id") == "1388207"
+          and fan.get("device_id") == "PHONEDID")
+    check("gw 风扇 room_id 由 room_map 回填（默认房间→None）",
+          fan.get("room") == "默认房间" and fan.get("room_id") is None)
+    check("gw 风扇 streams 来自 snapshot", set(fan.get("streams", [])) == {"Wind", "Mode", "Power"})
+    check("gw 风扇 card_meta：Power 可控 + Mode 枚举名",
+          fan.get("card_meta", {}).get("Power", {}).get("controllable") is True
+          and fan.get("card_meta", {}).get("Mode", {}).get("options", {}).get("0") == "普通模式")
+    socket = next((d for d in devs if str(d["feed_id"]) == "563221780494556020"), {})
+    check("gw 插座 room_id 直接带出（不靠回填）",
+          socket.get("room_id") == 3875794 and socket.get("room") == "客厅")
 
     print("\napi self-test", "PASS" if ok else "FAIL")
     return ok

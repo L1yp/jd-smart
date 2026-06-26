@@ -3,13 +3,13 @@
     "step": {
       "user": {
         "title": "小京鱼 JD Smart —— 账号凭据",
-        "description": "每个京东账号需填 3 项（均从 App 抓包获得）：tgt 登录票据（会过期）、jmafinger 与 pin 来自 Cookie。外加设备身份——device_id 或 android_id 二选一（首选 device_id：部分机型读不到 android_id，而 device_id = md5(android_id)，是同一个值）。其余 App/设备参数走默认值，需要改可在装好后的「选项 → 高级设置」里调。\n\n同一台手机可重复添加不同账号，以 pin 区分。",
+        "description": "两步配置：\n① **tgt**——登录票据（会过期，**必须是小京鱼 App 的** tgt）；\n② **设备身份**——device_id 或 android_id 二选一（首选 device_id；部分机型读不到 android_id，而 device_id = md5(android_id)，是同一个值）。\n\n发现走 gw.smart 轻量接口，**无需彩虹网关参数**。\n\n可选增强：填 **pin + jmafinger**（均来自 App Cookie）即启用完整物模型（风扇风速/模式、数值档位、只读电气量区分）；不填则只生成开关（Power）+ 传感器。\n\n其余参数走默认值，可在「选项 → 高级设置」调。同一手机可加多个账号（以 pin 或家庭区分）。",
         "data": {
-          "tgt": "tgt（登录票据，会过期）",
-          "color_jmafinger": "color_jmafinger（Cookie 的 UUID）",
-          "color_pin": "color_pin（Cookie 的 pin，账号标识）",
+          "tgt": "tgt（登录票据，会过期；小京鱼 App）",
           "device_id": "device_id（首选；= md5(android_id)）",
-          "android_id": "android_id（Settings.Secure.ANDROID_ID，16 位 hex；或改填 device_id）"
+          "android_id": "android_id（Settings.Secure.ANDROID_ID，16 位 hex；或改填 device_id）",
+          "color_pin": "color_pin（可选；与 jmafinger 一起填才有完整档位）",
+          "color_jmafinger": "color_jmafinger（可选；Cookie 的 UUID）"
         }
       },
       "houses": {
@@ -25,10 +25,11 @@
     },
     "error": {
       "need_identity": "请填 device_id 或 android_id（至少一个）。首选 device_id——它就是 md5(android_id)。",
+      "cannot_connect": "发现失败：{detail}。多为 tgt 过期或网络问题——请确认 tgt 是小京鱼 App 的最新值。",
       "eid_fetch_failed": "获取 eid 失败：{detail}。可手动填一个 eid，或检查设备身份/网络。"
     },
     "abort": {
-      "already_configured": "该京东账号（pin）已配置。同一账号不要重复添加；换号请用新的 pin。",
+      "already_configured": "该账号已配置（按 pin 或家庭判定）。同一账号不要重复添加。",
       "cannot_connect": "发现失败（网络 / 风控 / 凭据）。请检查 tgt 后重试。",
       "no_houses": "该账号没有返回任何家庭。",
       "no_devices": "所选家庭里没有发现设备。"
@@ -39,7 +40,7 @@
       "init": {
         "title": "小京鱼选项",
         "menu_options": {
-          "credentials": "更新凭据（tgt/jmafinger/pin/device_id）",
+          "credentials": "更新凭据（tgt / 设备身份 / 可选 pin+jmafinger）",
           "rediscover": "重新发现设备",
           "streams": "编辑传感器 / 单位",
           "settings": "高级设置（全部参数）",
@@ -48,18 +49,18 @@
       },
       "credentials": {
         "title": "更新凭据",
-        "description": "更新这几项（tgt 最容易过期）：tgt 登录票据、jmafinger/pin（Cookie）、以及设备身份（device_id 或 android_id 二选一，首选 device_id）。其余参数保持不变；要改 seg1/key/机型/eid/间隔 请用「高级设置」。改完若设备有变动，再点「重新发现设备」。",
+        "description": "更新这些（tgt 最容易过期）：tgt 登录票据、设备身份（device_id 或 android_id 二选一，首选 device_id）。可选的 pin + jmafinger 一起填了才有完整物模型（风扇档位/模式等）。其余参数不变；要改 seg1/key/机型/eid/间隔 请用「高级设置」。改完若设备有变动，再点「重新发现设备」。",
         "data": {
-          "tgt": "tgt（登录票据，会过期）",
-          "color_jmafinger": "color_jmafinger（Cookie 的 UUID）",
-          "color_pin": "color_pin（Cookie 的 pin，账号标识）",
+          "tgt": "tgt（登录票据，会过期；小京鱼 App）",
           "device_id": "device_id（首选；= md5(android_id)）",
-          "android_id": "android_id（16 位 hex；或改填 device_id）"
+          "android_id": "android_id（16 位 hex；或改填 device_id）",
+          "color_pin": "color_pin（可选；与 jmafinger 一起填才有完整档位）",
+          "color_jmafinger": "color_jmafinger（可选；Cookie 的 UUID）"
         }
       },
       "settings": {
         "title": "高级设置（全部参数）",
-        "description": "彩虹 color_* 用于发现设备；seg1/key 用于快照轮询；device_id（或 android_id）算 aid/uuid；eid 留空则自动获取。从旧版升级的条目：在这里把 color_* 和 device_id/android_id 等补填好，再点「重新发现设备」。",
+        "description": "发现走 gw（只需 tgt + 设备身份）；seg1/key 用于快照/控制轮询；pin/jmafinger/color_sign_secret 可选——填了才走彩虹 getDeviceDetails 拿完整物模型；device_id（或 android_id）算设备号；eid 留空则自动获取。从旧版升级：这里把 tgt 和（可选）pin/jmafinger 补填好，再点「重新发现设备」。",
         "data": {
           "color_sign_secret": "color_sign_secret（彩虹 HMAC 密钥）",
           "color_pin": "color_pin（Cookie 的 pin）",
@@ -105,7 +106,7 @@
       "cannot_connect": "发现失败。请检查 tgt 后重试。",
       "no_houses": "该账号没有返回任何家庭。",
       "no_devices": "尚无缓存设备。请先用「重新发现设备」。",
-      "missing_device_config": "缺少 color_* 凭据或设备身份（device_id/android_id）。请先打开「更新凭据」（或「高级设置」）填好，再重新发现。"
+      "missing_device_config": "缺少 tgt 或设备身份（device_id/android_id）。请先打开「更新凭据」（或「高级设置」）填好，再重新发现。"
     }
   },
   "services": {

@@ -80,6 +80,13 @@ CONTROL_PATH = "/c/service/integration/v1/controlDevice_v1"
 # 注：设备物模型走**彩虹网关** functionId jdsmart.device.getDeviceDetails（api.m.jd.com，
 # 彩虹 HMAC-SHA256），不在本组 smart-api path 里，见 color_api.JdColorClient.get_device_details。
 
+# ── gw.smart.jd.com 轻量发现接口（与 getDeviceSnapshot 同一套 HmacSHA1 签名）────
+# 只需 tgt + App 档 + device_id，**完全不碰彩虹**(eid/aid/ep/color_*)。用于发现家庭/设备，
+# 替代彩虹 getHouses/getAllDevices。device_id 只放 query、不参与签名、服务端不严格校验。
+GW_API_BASE = "https://gw.smart.jd.com"
+GW_HOUSES_PATH = "/s/service/getHousesAndRooms"          # body {} → 家庭+房间
+GW_DEVICES_PATH = "/c/service/devmanager/v2/getDevicesAndCategory"  # body {"houseId":"<str>"} → 设备+类目
+
 SERVICE_GET_SNAPSHOT = "get_device_snapshot"
 SERVICE_CONTROL_DEVICE = "control_device"
 # 诊断：拉取并返回某设备的彩虹 getDeviceDetails 物模型（原始响应 + 解析 + 可控归类），

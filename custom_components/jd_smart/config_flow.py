@@ -27,7 +27,8 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .color_api import JdColorClient, JdColorError, parse_device_list
+from .api import JdSmartClient, JdSmartError, parse_devices_gw, parse_houses_gw
+from .color_api import JdColorClient
 from .const import (
     COLOR_PROFILE_FIXED,
     CONF_ANDROID_ID,
@@ -107,17 +108,17 @@ def _with_defaults(data: dict) -> dict:
 
 
 def _credentials_schema(cfg: dict | None = None) -> vol.Schema:
-    """账号必填 3 项 + 设备身份（device_id 或 android_id 二选一，首选 device_id）。
-    首次安装步 user / 选项 credentials 共用。device_id 放前面（首选），android_id 兜底。
-    部分机型读不到 android_id，可直接填 device_id（= md5(android_id)，同一个值）。"""
+    """gw 发现只需 tgt + 设备身份（device_id 或 android_id 二选一，首选 device_id）。
+    首次安装步 user / 选项 credentials 共用。pin/jmafinger 为**可选增强**——填了才走彩虹
+    getDeviceDetails 拿完整物模型（风扇档位/模式等），不填只生成开关(Power)+传感器。"""
     cfg = cfg or {}
     return vol.Schema(
         {
             vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
-            vol.Required(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
-            vol.Required(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
             vol.Optional(CONF_DEVICE_ID, default=cfg.get(CONF_DEVICE_ID, "")): str,
             vol.Optional(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
+            vol.Optional(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
+            vol.Optional(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
         }
     )
 
@@ -127,11 +128,11 @@ def _settings_schema(cfg: dict) -> vol.Schema:
     设备身份 android_id / device_id 二选一（首选 device_id）；device_id 预填会把旧 device_id_override 带出来。"""
     return vol.Schema(
         {
+            vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
+            vol.Optional(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
+            vol.Optional(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
             vol.Required(CONF_COLOR_SIGN_SECRET,
                          default=cfg.get(CONF_COLOR_SIGN_SECRET) or DEFAULT_COLOR_SIGN_SECRET): str,
-            vol.Required(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
-            vol.Required(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
-            vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
             vol.Required(CONF_SEG1, default=cfg.get(CONF_SEG1) or DEFAULT_SEG1): str,
             vol.Required(CONF_KEY, default=cfg.get(CONF_KEY) or DEFAULT_KEY): str,
             vol.Optional(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
@@ -185,10 +186,29 @@ def _build_color_client(hass, data: dict, eid: str) -> JdColorClient:
         profile=prof,
         android_id=None,  # aid/uuid 已按 device_id 注入 profile
         ep_hdid="",
-        sign_secret=data[CONF_COLOR_SIGN_SECRET],
-        pin=data[CONF_COLOR_PIN],
-        jmafinger=data[CONF_COLOR_JMAFINGER],
+        sign_secret=data.get(CONF_COLOR_SIGN_SECRET) or DEFAULT_COLOR_SIGN_SECRET,
+        pin=data.get(CONF_COLOR_PIN) or "",
+        jmafinger=data.get(CONF_COLOR_JMAFINGER) or "",
         tgt=data[CONF_TGT],
+    )
+
+
+def _build_smart_client(hass, cfg: dict) -> JdSmartClient:
+    """gw/api.smart 客户端：发现(gw)、快照/控制(api.smart)同一套 HmacSHA1 签名。
+
+    只需 tgt + App 档（缺省自动补）+ device_id（仅 query、不签名）——**不碰彩虹**。
+    """
+    c = _with_defaults(cfg)
+    return JdSmartClient(
+        async_get_clientsession(hass),
+        seg1=c[CONF_SEG1],
+        key=c[CONF_KEY],
+        tgt=c[CONF_TGT],
+        hard_platform=c[CONF_HARD_PLATFORM],
+        app_version=c[CONF_APP_VERSION],
+        plat_version=c[CONF_PLAT_VERSION],
+        channel=c[CONF_CHANNEL],
+        plat=c[CONF_PLAT],
     )
 
 
@@ -216,16 +236,30 @@ def _has_identity(data: dict, options: dict | None = None) -> bool:
     return bool(_device_id_for(data, options))
 
 
-def _parse_houses(resp: dict) -> list[dict]:
-    """getHouses → [{house_id, house_name}]。"""
-    result = (resp or {}).get("result") or {}
-    houses = []
-    for h in result.get("houseList") or []:
-        hid = h.get("houseId")
-        if hid is None:
-            continue
-        houses.append({"house_id": str(hid), "house_name": h.get("houseName") or str(hid)})
-    return houses
+async def _async_fetch_houses_gw(hass, cfg: dict) -> list[dict]:
+    """gw 发现家庭+房间（不走彩虹）。业务失败（tgt 过期等 status≠0）抛 JdSmartError。"""
+    client = _build_smart_client(hass, cfg)
+    raw = await client.get_houses_and_rooms(_device_id_for(cfg))
+    if isinstance(raw, dict) and raw.get("status") not in (0, None):
+        # gw 对过期 tgt 返回 HTTP 200 + status:-4；不抛就会被当成"没有家庭"，误导用户
+        raise JdSmartError(f"status={raw.get('status')} error={raw.get('error')}")
+    return parse_houses_gw(raw)
+
+
+async def _async_fetch_devices_gw(hass, cfg: dict, houses: list[dict],
+                                  house_ids: list[str], device_id: str) -> list[dict]:
+    """gw 发现所选家庭的设备（不走彩虹）。用 house 的 rooms 表给设备回填 room_id。"""
+    client = _build_smart_client(hass, cfg)
+    room_maps = {h["house_id"]: (h.get("rooms") or {}) for h in houses}
+    out: list[dict] = []
+    for hid in house_ids:
+        try:
+            raw = await client.get_devices_and_category(device_id, hid)
+        except JdSmartError:
+            continue  # 单个家庭失败不拖垮其它家庭
+        out.extend(parse_devices_gw(raw, house_id=hid, room_map=room_maps.get(hid),
+                                    requester_device_id=device_id))
+    return _dedupe_by_feed(out)
 
 
 def _dedupe_by_feed(devices: list[dict]) -> list[dict]:
@@ -309,23 +343,6 @@ async def _async_resolve_eid(hass, data: dict) -> tuple[str | None, str | None]:
     return eid, None
 
 
-async def _async_fetch_houses(hass, cfg: dict, eid: str) -> list[dict]:
-    client = _build_color_client(hass, cfg, eid)
-    return _parse_houses(await client.get_houses())
-
-
-async def _async_fetch_devices(hass, cfg: dict, eid: str, house_ids: list[str], device_id: str) -> list[dict]:
-    client = _build_color_client(hass, cfg, eid)
-    out: list[dict] = []
-    for hid in house_ids:
-        try:
-            resp = await client.get_all_devices(hid)
-        except JdColorError:
-            continue
-        out.extend(parse_device_list(resp, requester_device_id=device_id))
-    return _dedupe_by_feed(out)
-
-
 def merged_config(entry) -> dict:
     """entry.data 叠加 entry.options（非空覆盖）。让选项里补填的 凭据/设备档/eid 生效，旧条目也能用。"""
     cfg = dict(entry.data)
@@ -393,7 +410,11 @@ def _parse_manual_devices(text: str | None, device_id: str) -> list[dict]:
 
 # ── ConfigFlow ─────────────────────────────────────────────────────────────
 class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """首次安装：账号 4 项 → 选家庭 → 选设备。支持多账号（unique_id = color_pin）。"""
+    """首次安装：tgt + 设备身份 → gw 发现家庭 → 选设备。
+
+    发现走 gw.smart.jd.com 轻量接口（只需 tgt + App 档 + device_id，**不碰彩虹**）。
+    多账号 unique_id：填了 pin 用 pin（与旧条目兼容）；否则用账号家庭 id（不同账号家庭不同）。
+    """
 
     VERSION = 1
 
@@ -409,21 +430,28 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         placeholders = {"detail": ""}
         if user_input is not None:
-            self._data = _with_defaults(user_input)  # 必填项 + 自动补齐常量默认值
+            self._data = _with_defaults(user_input)  # tgt+身份 + 自动补齐常量默认值
             if not _has_identity(self._data):
                 errors["base"] = "need_identity"  # device_id / android_id 至少给一个
             else:
-                # 多账号：以 color_pin 作 unique_id —— 同一台手机可加多个京东账号，
-                # 重复账号（同 pin）会在此中止（already_configured）。
-                await self.async_set_unique_id(self._data[CONF_COLOR_PIN])
-                self._abort_if_unique_id_configured()
-                eid, err = await _async_resolve_eid(self.hass, self._data)
-                if err:
-                    errors["base"] = "eid_fetch_failed"
-                    placeholders["detail"] = err
+                pin = (self._data.get(CONF_COLOR_PIN) or "").strip()
+                if pin:  # 填了 pin：发现前就能拦重复账号（与旧条目 unique_id 一致）
+                    await self.async_set_unique_id(pin)
+                    self._abort_if_unique_id_configured()
+                try:
+                    self._houses = await _async_fetch_houses_gw(self.hass, self._data)
+                except JdSmartError as err:
+                    errors["base"] = "cannot_connect"  # tgt 过期会落这里，detail 给出 status/error
+                    placeholders["detail"] = str(err)
                 else:
-                    self._data[CONF_EID] = eid
-                    return await self.async_step_houses()
+                    if not self._houses:
+                        errors["base"] = "no_houses"
+                    else:
+                        if not pin:  # 没 pin：用家庭 id 作 unique_id 拦重复账号
+                            uid = "gwhouse_" + "_".join(sorted(h["house_id"] for h in self._houses))
+                            await self.async_set_unique_id(uid)
+                            self._abort_if_unique_id_configured()
+                        return await self.async_step_houses()
         return self.async_show_form(
             step_id="user",
             data_schema=_credentials_schema(self._data),
@@ -434,13 +462,7 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_houses(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        if not self._houses:
-            try:
-                self._houses = await _async_fetch_houses(self.hass, self._data, self._data[CONF_EID])
-            except Exception:  # noqa: BLE001  网络/风控/签名失败统一中止
-                return self.async_abort(reason="cannot_connect")
-            if not self._houses:
-                return self.async_abort(reason="no_houses")
+        # 家庭已在 user 步用 gw 拉好
         if user_input is not None:
             self._selected_house_ids = user_input["houses"]
             return await self.async_step_devices()
@@ -452,11 +474,11 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.ConfigFlowResult:
         if not self._all_devices:
             try:
-                self._all_devices = await _async_fetch_devices(
-                    self.hass, self._data, self._data[CONF_EID],
+                self._all_devices = await _async_fetch_devices_gw(
+                    self.hass, self._data, self._houses,
                     self._selected_house_ids, _device_id_for(self._data),
                 )
-            except Exception:  # noqa: BLE001
+            except JdSmartError:
                 return self.async_abort(reason="cannot_connect")
             if not self._all_devices:
                 return self.async_abort(reason="no_devices")
@@ -468,14 +490,18 @@ class JdSmartConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 for d in self._all_devices
                 if str(d["feed_id"]) in selected
             ]
-            houses = [h for h in self._houses if h["house_id"] in self._selected_house_ids]
+            houses = [
+                {"house_id": h["house_id"], "house_name": h["house_name"]}
+                for h in self._houses if h["house_id"] in self._selected_house_ids
+            ]
             options = {
                 CONF_DEVICES: cache,
                 CONF_HOUSES: houses,
                 CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
             }
-            # 标题带上 pin，便于在集成页区分多个账号
-            title = f"小京鱼 {self._data.get(CONF_COLOR_PIN)}".strip()
+            # 标题：有 pin 用 pin，否则用 device_id 前 8 位，便于区分多账号
+            tag = ((self._data.get(CONF_COLOR_PIN) or "").strip() or did[:8])
+            title = f"小京鱼 {tag}".strip()
             return self.async_create_entry(title=title, data=self._data, options=options)
         default = [str(d["feed_id"]) for d in self._all_devices]
         return self.async_show_form(
@@ -500,7 +526,6 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
         self._selected_house_ids: list[str] = []
         self._all_devices: list[dict] = []
         self._edit_feed: str | None = None
-        self._eid: str | None = None
 
     def _merged_options(self, **updates) -> dict:
         opts = dict(self._entry.options)
@@ -526,7 +551,6 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
             if not _has_identity(merged):
                 errors["base"] = "need_identity"
             else:
-                self._eid = None  # 身份/tgt 可能变了，下次发现时重新解析 eid
                 return self.async_create_entry(title="", data=self._merged_options(**user_input))
         cfg = merged_config(self._entry)
         return self.async_show_form(
@@ -538,30 +562,24 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         if user_input is not None:
-            self._eid = None  # 设备档可能变了，下次重新发现时重新解析 eid
             return self.async_create_entry(title="", data=self._merged_options(**user_input))
         cfg = merged_config(self._entry)
         return self.async_show_form(
             step_id="settings", data_schema=_settings_schema(cfg)
         )
 
-    # --- 重选设备（houses → devices）---
+    # --- 重选设备（gw 发现：houses → devices）---
     async def async_step_rediscover(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         cfg = merged_config(self._entry)
-        # 旧条目可能没填 color 凭据 / 设备身份：先去「更新凭据」或「高级设置」补齐
-        if not _has_identity(cfg) or not cfg.get(CONF_COLOR_SIGN_SECRET):
+        # 旧条目可能没填 tgt / 设备身份：先去「更新凭据」或「高级设置」补齐
+        if not _has_identity(cfg) or not cfg.get(CONF_TGT):
             return self.async_abort(reason="missing_device_config")
-        if self._eid is None:
-            eid, err = await _async_resolve_eid(self.hass, cfg)
-            if err:
-                return self.async_abort(reason="cannot_connect")
-            self._eid = eid
         if not self._houses:
             try:
-                self._houses = await _async_fetch_houses(self.hass, cfg, self._eid)
-            except Exception:  # noqa: BLE001
+                self._houses = await _async_fetch_houses_gw(self.hass, cfg)
+            except JdSmartError:
                 return self.async_abort(reason="cannot_connect")
             if not self._houses:
                 return self.async_abort(reason="no_houses")
@@ -578,18 +596,13 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         cfg = merged_config(self._entry)
-        if self._eid is None:
-            eid, err = await _async_resolve_eid(self.hass, cfg)
-            if err:
-                return self.async_abort(reason="cannot_connect")
-            self._eid = eid
         if not self._all_devices:
             try:
-                self._all_devices = await _async_fetch_devices(
-                    self.hass, cfg, self._eid, self._selected_house_ids,
+                self._all_devices = await _async_fetch_devices_gw(
+                    self.hass, cfg, self._houses, self._selected_house_ids,
                     _device_id_for(cfg, self._entry.options),
                 )
-            except Exception:  # noqa: BLE001
+            except JdSmartError:
                 return self.async_abort(reason="cannot_connect")
             if not self._all_devices:
                 return self.async_abort(reason="no_devices")
@@ -601,7 +614,10 @@ class JdSmartOptionsFlow(config_entries.OptionsFlow):
                 for d in self._all_devices
                 if str(d["feed_id"]) in selected
             ]
-            houses = [h for h in self._houses if h["house_id"] in self._selected_house_ids]
+            houses = [
+                {"house_id": h["house_id"], "house_name": h["house_name"]}
+                for h in self._houses if h["house_id"] in self._selected_house_ids
+            ]
             return self.async_create_entry(
                 title="", data=self._merged_options(**{CONF_DEVICES: cache, CONF_HOUSES: houses})
             )
