@@ -452,7 +452,10 @@ class JdSmartClient:
             return {"raw": text}
 
     async def get_device_snapshot(self, device_id: str, feed_id) -> dict:
-        return await self._post(SNAPSHOT_PATH, device_id, self.build_body(feed_id))
+        # 走 **gw 统一网关**（与发现/物模型同一个 tgt）。实测：api.smart.jd.com 那套 integration/v1
+        # 用小京鱼 tgt 恒 -4「登录已过期」（它要另一 App 的登录态/pin）；gw.smart.jd.com 转发**同一**
+        # integration/v1 接口，当前 tgt 即 status=0。故 snapshot/control 一并改走 GW_API_BASE。
+        return await self._post(SNAPSHOT_PATH, device_id, self.build_body(feed_id), base=GW_API_BASE)
 
     # ---- gw.smart.jd.com 轻量发现（不走彩虹；同一套签名，仅换 base/path/body）----
     async def get_houses_and_rooms(self, device_id: str, body: dict | None = None) -> dict:
@@ -494,10 +497,12 @@ class JdSmartClient:
     async def control_device(self, device_id: str, feed_id, commands) -> dict:
         """下发控制。commands=[{stream_id,current_value},...]。
 
+        走 **gw 统一网关**（base=GW_API_BASE，与 snapshot 同因：api.smart 域 -4，gw 转发同接口 status=0）。
         响应结构与快照一致（{status,error,result:"<内层>"}，内层含 control_ret + 全量最新 streams），
         故可直接 parse_snapshot 解析并乐观刷新。
         """
-        return await self._post(CONTROL_PATH, device_id, self.build_control_body(feed_id, commands))
+        return await self._post(CONTROL_PATH, device_id, self.build_control_body(feed_id, commands),
+                                base=GW_API_BASE)
 
 
 # ====================== 离线自检（不联网、不需 aiohttp、不需真实凭据）======================

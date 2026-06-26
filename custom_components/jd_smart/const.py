@@ -42,7 +42,7 @@ CONF_STREAM_OVERRIDES = "stream_overrides"  # {feed_id: {stream_id: {name,unit,e
 CONF_DEVICE_ID_OVERRIDE = "device_id_override"  # 旧字段：等价于 CONF_DEVICE_ID，仍兼容读取
 CONF_SCAN_INTERVAL = "scan_interval"
 
-# ── api.smart / gw 默认 App 档（进 device_md 签名 + query）─────────────────────
+# ── gw 默认 App 档（进 device_md 签名 + query）────────────────────────────────
 # 取用户实测通过 gw 发现的组合 HWI-AL00/7.3.0/9（device_id 不签名故不在此）。app_version 只要
 # 与 query 自洽即可被 DEFAULT_KEY 验签——旧条目已把自己的版本存进 data，改这里只影响新装。
 DEFAULT_HARD_PLATFORM = "HWI-AL00"
@@ -75,12 +75,16 @@ COLOR_PROFILE_FIXED = {
     "partner": "xjgw-android",
 }
 
-# ── api.smart.jd.com 接口（同一套 HmacSHA1 签名，仅 path/body 不同）────────────
-API_BASE = "https://api.smart.jd.com"
+# ── integration/v1 接口：状态快照 + 控制（同一套 HmacSHA1 签名，仅 path/body 不同）──────
+# **改走 gw 统一网关**（实测 2026-06-26）：api.smart.jd.com 用小京鱼 tgt 调 integration/v1 恒
+# -4「登录已过期」（它要另一 App 的登录态/pin，与发现/物模型用的 tgt 不是一套）；gw.smart.jd.com
+# **转发同一** integration/v1 接口、当前 tgt 即 status=0。故 api.get_device_snapshot/control_device
+# 显式 base=GW_API_BASE（见下）。API_BASE 仅留作 _post 的默认兜底，不再实际命中。
+API_BASE = "https://api.smart.jd.com"  # 旧域，已不直接使用（snapshot/control 现走 GW_API_BASE）
 SNAPSHOT_PATH = "/c/service/integration/v1/getDeviceSnapshot_v1"
 CONTROL_PATH = "/c/service/integration/v1/controlDevice_v1"
-# 注：设备物模型走**彩虹网关** functionId jdsmart.device.getDeviceDetails（api.m.jd.com，
-# 彩虹 HMAC-SHA256），不在本组 smart-api path 里，见 color_api.JdColorClient.get_device_details。
+# 注：设备完整物模型同样走 gw（getDeviceDetails，见 GW_DETAILS_PATH / api.get_device_details）；
+# 彩虹版 getDeviceDetails 已退役。
 
 # ── gw.smart.jd.com 轻量发现接口（与 getDeviceSnapshot 同一套 HmacSHA1 签名）────
 # 只需 tgt + App 档 + device_id，**完全不碰彩虹**(eid/aid/ep/color_*)。用于发现家庭/设备，
