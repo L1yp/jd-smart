@@ -95,49 +95,38 @@ class JdSmartCoordinator(DataUpdateCoordinator):
                 result[feed_id] = None
         return result
 
-    async def async_fetch_models(self, color_client=None) -> None:
-        """每台设备拉一次物模型；失败/为空/无彩虹客户端则回退 card_meta。setup 阶段调用一次。
+    async def async_fetch_models(self) -> None:
+        """每台设备拉一次完整物模型（**gw** getDeviceDetails，不走彩虹）；失败/为空回退 card_meta。
 
-        物模型走**彩虹** getDeviceDetails（jdsmart.device.getDeviceDetails），是静态元数据
-        （哪些流可控、枚举档位、数值范围），不随状态变，故只在 setup 拉一次；实时值仍走快照轮询。
+        gw getDeviceDetails 是静态元数据（哪些流可控、枚举档位、数值范围），不随状态变，故只在
+        setup 拉一次；实时值仍走快照轮询。只需 device_id + feed_id + houseId（连 roomId 都不要），
+        所有人都拿得到完整模型，无需 pin/jmafinger/eid。streams 在 result.streams → parse_stream_model。
         """
-        from .color_api import JdColorError  # 局部导入：仅 setup 用到彩虹客户端
-
         for dev in self.devices:
             feed_id = dev["feed_id"]
             name = dev.get("name", feed_id)
+            house_id = dev.get("house_id")
             model: dict = {}
             source = "card_meta"
-            if color_client is not None:
-                try:
-                    raw = await color_client.get_device_details(
-                        feed_id,
-                        house_id=dev.get("house_id"),
-                        room_id=dev.get("room_id"),
-                        device_id=dev.get("hw_device_id"),
-                    )
-                    model = parse_stream_model(raw)
-                    if model:
-                        source = "getDeviceDetails"
-                        _enrich_options_from_card_meta(model, dev)
-                    else:
-                        # 关键盲点：接口有响应但解析不出 streams（路径不符/空/错误载荷）。
-                        # 以前这里静默回退 card_meta，"只有 Power"无从排查——打出原始片段。
-                        _LOGGER.warning(
-                            "设备 %s(feed=%s) getDeviceDetails 未解析出物模型，回退 card_meta"
-                            "（card_control 通常只标 Power 可控，故只会生成 Power 开关）。"
-                            "用 jd_smart.get_device_model 服务看完整原始响应。响应片段: %s",
-                            name, feed_id, _snippet(raw),
-                        )
-                except JdColorError as err:
+            try:
+                raw = await self.client.get_device_details(dev["device_id"], feed_id, house_id)
+                model = parse_stream_model(raw)
+                if model:
+                    source = "getDeviceDetails(gw)"
+                    _enrich_options_from_card_meta(model, dev)
+                else:
+                    # 接口有响应但解析不出 streams（houseId 不符/tgt 过期/空载荷）。
+                    # 以前静默回退 card_meta，"只有 Power"无从排查——打出 houseId + 原始片段。
                     _LOGGER.warning(
-                        "拉取设备 %s(feed=%s) 物模型失败，回退 card_meta（只会有 Power）: %s",
-                        name, feed_id, err,
+                        "设备 %s(feed=%s) gw getDeviceDetails 未解析出物模型，回退 card_meta"
+                        "（card_control 通常只标 Power → 只生成 Power 开关）。核对 houseId=%s 是否正确、"
+                        "tgt 是否过期。用 jd_smart.get_device_model 服务看完整响应。片段: %s",
+                        name, feed_id, house_id, _snippet(raw),
                     )
-            else:
-                _LOGGER.info(
-                    "设备 %s(feed=%s) 无彩虹客户端，用 card_meta 物模型（通常仅 Power 可控）",
-                    name, feed_id,
+            except JdSmartError as err:
+                _LOGGER.warning(
+                    "拉取设备 %s(feed=%s) gw 物模型失败，回退 card_meta（只会有 Power）: %s",
+                    name, feed_id, err,
                 )
             if not model:
                 model = model_from_card_meta(dev)
@@ -152,7 +141,7 @@ class JdSmartCoordinator(DataUpdateCoordinator):
                 )
             else:
                 _LOGGER.warning(
-                    "设备 %s(feed=%s) 无任何物模型（getDeviceDetails 与 card_meta 均为空），不会生成可控实体",
+                    "设备 %s(feed=%s) 无任何物模型（gw getDeviceDetails 与 card_meta 均为空），不会生成可控实体",
                     name, feed_id,
                 )
 

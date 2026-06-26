@@ -88,6 +88,9 @@ CONTROL_PATH = "/c/service/integration/v1/controlDevice_v1"
 GW_API_BASE = "https://gw.smart.jd.com"
 GW_HOUSES_PATH = "/s/service/getHousesAndRooms"          # body {} → 家庭+房间
 GW_DEVICES_PATH = "/c/service/devmanager/v2/getDevicesAndCategory"  # body {"houseId":"<str>"} → 设备+类目
+# 完整物模型也走 gw（不再需要彩虹 getDeviceDetails / eid / color_*）：streams 在 result.streams，
+# body 只需 feed_id + houseId（连 roomId 都不要）。见 api.JdSmartClient.get_device_details。
+GW_DETAILS_PATH = "/c/service/devmanager/v1/getDeviceDetails"
 
 SERVICE_GET_SNAPSHOT = "get_device_snapshot"
 SERVICE_CONTROL_DEVICE = "control_device"

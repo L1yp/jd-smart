@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "JD Smart (小京鱼) — Account credentials",
-        "description": "Just two things:\n① **tgt** — login ticket (expires; must be the JD IoT '小京鱼' app's tgt);\n② **device_id** — paste the device_id straight from your captured request/curl (a UUID like `b0b57721-…` is fine; it isn't signed and the server doesn't strictly validate it, so **no md5/android_id needed**).\n\nDiscovery uses the lightweight gw.smart endpoints — **no jmafinger/pin/eid (rainbow) params needed**; model/version app params use defaults.\n\nFor the full device model (fan steps/mode, etc.), after install go to Options → Advanced and add pin + jmafinger. The same phone can hold multiple accounts (told apart by home).",
+        "description": "Just two things:\n① **tgt** — login ticket (expires; must be the JD IoT '小京鱼' app's tgt);\n② **device_id** — paste the device_id straight from your captured request/curl (a UUID like `b0b57721-…` is fine; it isn't signed and the server doesn't strictly validate it, so **no md5/android_id needed**).\n\nDiscovery, snapshots, control and the **full device model** all use the same gw/api.smart signing — **no jmafinger/pin/eid (rainbow) params needed**; model/version app params use defaults.\n\nThe full model (fan speeds/mode, numeric controls) is fetched **automatically** — no extra credentials. The same phone can hold multiple accounts (told apart by home).",
         "data": {
           "tgt": "tgt (login ticket, expires; JD IoT app)",
           "device_id": "device_id (paste from your captured request/curl; a UUID is fine)"
@@ -22,8 +22,7 @@
     },
     "error": {
       "need_identity": "Fill device_id (paste it from your captured request/curl — a UUID is fine). If you only have android_id, set it under Advanced and it will be derived automatically.",
-      "cannot_connect": "Discovery failed: {detail}. Usually an expired tgt or a network issue — make sure tgt is the latest value from the JD IoT app.",
-      "eid_fetch_failed": "Failed to fetch eid: {detail}. Enter an eid manually, or check the device identity/network."
+      "cannot_connect": "Discovery failed: {detail}. Usually an expired tgt or a network issue — make sure tgt is the latest value from the JD IoT app."
     },
     "abort": {
       "already_configured": "This account is already configured (matched by pin or home). Don't add the same account twice.",
@@ -37,7 +36,7 @@
       "init": {
         "title": "JD Smart options",
         "menu_options": {
-          "credentials": "Update credentials (tgt / identity / optional pin+jmafinger)",
+          "credentials": "Update credentials (tgt / identity)",
           "rediscover": "Re-discover devices",
           "streams": "Edit sensors / units",
           "settings": "Advanced (all parameters)",
@@ -46,7 +45,7 @@
       },
       "credentials": {
         "title": "Update credentials",
-        "description": "Update these two (tgt expires most often): tgt login ticket and device_id (paste from your captured request/curl; a UUID is fine). android_id (alternative identity) and pin/jmafinger (full-model enhancement) live under Advanced. After updating, run Re-discover if your devices changed.",
+        "description": "Update these two (tgt expires most often): tgt login ticket and device_id (paste from your captured request/curl; a UUID is fine). The full model is fetched automatically — no extra credentials; android_id (alternative identity) lives under Advanced. After updating, run Re-discover if your devices changed.",
         "data": {
           "tgt": "tgt (login ticket, expires; JD IoT app)",
           "device_id": "device_id (paste from your captured request/curl; a UUID is fine)"
@@ -54,23 +53,13 @@
       },
       "settings": {
         "title": "Advanced (all parameters)",
-        "description": "Discovery uses gw (only tgt + device identity); seg1/key poll snapshots/control; pin/jmafinger/color_sign_secret are optional — fill them to fetch the full model via rainbow getDeviceDetails; device_id (or android_id) is the device id; leave eid empty to auto-fetch. Upgrading: fill tgt and (optionally) pin/jmafinger here, then run Re-discover.",
+        "description": "Discovery, snapshots, control and the full model all use the same gw/api.smart signing — only tgt + device identity (device_id or android_id; prefer device_id, paste the UUID). seg1/key/model/version are app-level constants you rarely need to touch. The rainbow params (pin/jmafinger/eid/device profile) are retired and no longer used.",
         "data": {
-          "color_sign_secret": "color_sign_secret (rainbow HMAC key)",
-          "color_pin": "color_pin (cookie pin)",
-          "color_jmafinger": "color_jmafinger (cookie UUID)",
-          "tgt": "tgt (login ticket)",
+          "tgt": "tgt (login ticket, expires; JD IoT app)",
+          "device_id": "device_id (preferred; paste from your captured request/curl; a UUID is fine)",
+          "android_id": "android_id (alternative identity; 16hex)",
           "seg1": "seg1 (constant id)",
           "key": "HmacSHA1 key",
-          "android_id": "android_id (16hex; or use device_id)",
-          "device_id": "device_id (preferred; = md5(android_id), overrides android_id)",
-          "d_brand": "Brand",
-          "d_model": "Model",
-          "os_version": "OS version (SDK_INT)",
-          "screen": "Screen (e.g. 1080*2160)",
-          "area": "LBS area code",
-          "network_type": "Network type",
-          "eid": "eid (optional; empty = auto-fetch)",
           "hard_platform": "hard_platform (model)",
           "app_version": "app_version",
           "plat_version": "plat_version",
@@ -142,7 +131,7 @@
     },
     "get_device_model": {
       "name": "Query device model (diagnostic)",
-      "description": "Fetch the device's rainbow getDeviceDetails model; returns raw response + parsed model + control routing. Use it to debug 'why only a Power switch' — a control_map missing Mode/Wind/oscillation means getDeviceDetails returned no model at runtime and it silently fell back to card_meta (whose card_control only marks Power controllable).",
+      "description": "Fetch the device's gw getDeviceDetails model; returns raw response + parsed model + control routing. Use it to debug 'why only a Power switch' — a control_map missing Mode/Wind/oscillation means getDeviceDetails returned no model at runtime and it silently fell back to card_meta (whose card_control only marks Power controllable).",
       "fields": {
         "feed_id": {
           "name": "feed_id",

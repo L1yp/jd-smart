@@ -28,59 +28,38 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import JdSmartClient, JdSmartError, parse_devices_gw, parse_houses_gw
-from .color_api import JdColorClient
 from .const import (
-    COLOR_PROFILE_FIXED,
     CONF_ANDROID_ID,
     CONF_APP_VERSION,
-    CONF_AREA,
     CONF_CHANNEL,
-    CONF_COLOR_JMAFINGER,
     CONF_COLOR_PIN,
-    CONF_COLOR_SIGN_SECRET,
-    CONF_D_BRAND,
-    CONF_D_MODEL,
     CONF_DEVICE_ID,
     CONF_DEVICE_ID_OVERRIDE,
     CONF_DEVICES,
-    CONF_EID,
     CONF_HARD_PLATFORM,
     CONF_HOUSES,
     CONF_KEY,
-    CONF_NETWORK_TYPE,
-    CONF_OS_VERSION,
     CONF_PLAT,
     CONF_PLAT_VERSION,
     CONF_SCAN_INTERVAL,
-    CONF_SCREEN,
     CONF_SEG1,
     CONF_STREAM_OVERRIDES,
     CONF_TGT,
     DEFAULT_APP_VERSION,
-    DEFAULT_AREA,
     DEFAULT_CHANNEL,
-    DEFAULT_COLOR_SIGN_SECRET,
-    DEFAULT_D_BRAND,
-    DEFAULT_D_MODEL,
     DEFAULT_HARD_PLATFORM,
     DEFAULT_KEY,
-    DEFAULT_NETWORK_TYPE,
-    DEFAULT_OS_VERSION,
     DEFAULT_PLAT,
     DEFAULT_PLAT_VERSION,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_SCREEN,
     DEFAULT_SEG1,
     DOMAIN,
 )
-from .device_finger import EidFetchError, async_fetch_eid
-from .eid_cache import async_get_cached_eid, async_save_eid
 
-# ── 账号必填 4 项（步 user / 选项 credentials）──────────────────────────────
-# 每个账号不同的就这 4 项；其余 seg1/key/color_sign_secret/机型/设备档 都是 App/设备级
-# 常量，对所有账号一致，用默认值自动补（高级设置里仍可改）。这样首次安装只填 4 项。
+# ── App 级常量默认值（user/credentials 表单不填的，自动补齐）─────────────────
+# 发现/快照/控制/物模型全走 gw/api.smart 的 HmacSHA1（只认这几项 + tgt + device_id）；彩虹那套
+# (eid/aid/ep/color_*) 已不再使用，故默认值里也不含它们。
 ADVANCED_DEFAULTS = {
-    CONF_COLOR_SIGN_SECRET: DEFAULT_COLOR_SIGN_SECRET,
     CONF_SEG1: DEFAULT_SEG1,
     CONF_KEY: DEFAULT_KEY,
     CONF_HARD_PLATFORM: DEFAULT_HARD_PLATFORM,
@@ -88,18 +67,12 @@ ADVANCED_DEFAULTS = {
     CONF_PLAT_VERSION: DEFAULT_PLAT_VERSION,
     CONF_CHANNEL: DEFAULT_CHANNEL,
     CONF_PLAT: DEFAULT_PLAT,
-    CONF_D_BRAND: DEFAULT_D_BRAND,
-    CONF_D_MODEL: DEFAULT_D_MODEL,
-    CONF_OS_VERSION: DEFAULT_OS_VERSION,
-    CONF_SCREEN: DEFAULT_SCREEN,
-    CONF_AREA: DEFAULT_AREA,
-    CONF_NETWORK_TYPE: DEFAULT_NETWORK_TYPE,
 }
 
 
 def _with_defaults(data: dict) -> dict:
-    """把 4 必填项之外的 App/设备级常量用默认值补齐（仅补缺失/空值），返回新 dict。
-    下游 _build_color_client / JdSmartClient 仍能拿到完整字段，无需在表单里手抄常量。"""
+    """把表单没填的 App 级常量用默认值补齐（仅补缺失/空值），返回新 dict。
+    下游 JdSmartClient 仍能拿到完整签名字段，无需在表单里手抄常量。"""
     out = dict(data)
     for k, dv in ADVANCED_DEFAULTS.items():
         if not out.get(k):
@@ -123,27 +96,17 @@ def _credentials_schema(cfg: dict | None = None) -> vol.Schema:
 
 
 def _settings_schema(cfg: dict) -> vol.Schema:
-    """选项里「凭据与设备信息」一站式编辑（旧条目补齐 / 随时修改）。默认值取 merged 配置。
-    设备身份 android_id / device_id 二选一（首选 device_id）；device_id 预填会把旧 device_id_override 带出来。"""
+    """高级设置：发现/快照/控制/物模型全走 gw/api.smart 的同一套签名，只需这几项 + tgt + 身份。
+    设备身份 android_id / device_id 二选一（首选 device_id，直接粘贴抓包里的 UUID）；
+    device_id 预填会把旧 device_id_override 带出来。彩虹相关项（pin/jmafinger/eid/机型档）已废弃。"""
     return vol.Schema(
         {
             vol.Required(CONF_TGT, default=cfg.get(CONF_TGT, "")): str,
-            vol.Optional(CONF_COLOR_PIN, default=cfg.get(CONF_COLOR_PIN, "")): str,
-            vol.Optional(CONF_COLOR_JMAFINGER, default=cfg.get(CONF_COLOR_JMAFINGER, "")): str,
-            vol.Required(CONF_COLOR_SIGN_SECRET,
-                         default=cfg.get(CONF_COLOR_SIGN_SECRET) or DEFAULT_COLOR_SIGN_SECRET): str,
-            vol.Required(CONF_SEG1, default=cfg.get(CONF_SEG1) or DEFAULT_SEG1): str,
-            vol.Required(CONF_KEY, default=cfg.get(CONF_KEY) or DEFAULT_KEY): str,
-            vol.Optional(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
             vol.Optional(CONF_DEVICE_ID,
                          default=cfg.get(CONF_DEVICE_ID) or cfg.get(CONF_DEVICE_ID_OVERRIDE) or ""): str,
-            vol.Required(CONF_D_BRAND, default=cfg.get(CONF_D_BRAND, DEFAULT_D_BRAND)): str,
-            vol.Required(CONF_D_MODEL, default=cfg.get(CONF_D_MODEL, DEFAULT_D_MODEL)): str,
-            vol.Required(CONF_OS_VERSION, default=cfg.get(CONF_OS_VERSION, DEFAULT_OS_VERSION)): str,
-            vol.Required(CONF_SCREEN, default=cfg.get(CONF_SCREEN, DEFAULT_SCREEN)): str,
-            vol.Required(CONF_AREA, default=cfg.get(CONF_AREA, DEFAULT_AREA)): str,
-            vol.Required(CONF_NETWORK_TYPE, default=cfg.get(CONF_NETWORK_TYPE, DEFAULT_NETWORK_TYPE)): str,
-            vol.Optional(CONF_EID, default=cfg.get(CONF_EID, "")): str,
+            vol.Optional(CONF_ANDROID_ID, default=cfg.get(CONF_ANDROID_ID, "")): str,
+            vol.Required(CONF_SEG1, default=cfg.get(CONF_SEG1) or DEFAULT_SEG1): str,
+            vol.Required(CONF_KEY, default=cfg.get(CONF_KEY) or DEFAULT_KEY): str,
             vol.Required(CONF_HARD_PLATFORM, default=cfg.get(CONF_HARD_PLATFORM, DEFAULT_HARD_PLATFORM)): str,
             vol.Required(CONF_APP_VERSION, default=cfg.get(CONF_APP_VERSION, DEFAULT_APP_VERSION)): str,
             vol.Required(CONF_PLAT_VERSION, default=cfg.get(CONF_PLAT_VERSION, DEFAULT_PLAT_VERSION)): str,
@@ -155,43 +118,6 @@ def _settings_schema(cfg: dict) -> vol.Schema:
 
 
 # ── 共享纯函数 ─────────────────────────────────────────────────────────────
-def _assemble_profile(data: dict, eid: str) -> dict:
-    """从 entry data + eid 拼出彩虹 color_profile（固定常量 + 设备描述 + eid）。"""
-    prof = dict(COLOR_PROFILE_FIXED)
-    prof.update(
-        {
-            "eid": eid,
-            "d_brand": data.get(CONF_D_BRAND) or DEFAULT_D_BRAND,
-            "d_model": data.get(CONF_D_MODEL) or DEFAULT_D_MODEL,
-            "osVersion": data.get(CONF_OS_VERSION) or DEFAULT_OS_VERSION,
-            "screen": data.get(CONF_SCREEN) or DEFAULT_SCREEN,
-            "area": data.get(CONF_AREA) or DEFAULT_AREA,
-            "networkType": data.get(CONF_NETWORK_TYPE) or DEFAULT_NETWORK_TYPE,
-        }
-    )
-    return prof
-
-
-def _build_color_client(hass, data: dict, eid: str) -> JdColorClient:
-    """彩虹发现客户端（aiohttp 走 HA 共享 session）。
-
-    aid=uuid=device_id（= 用户直填的 device_id 或 md5(android_id)），直接注入 profile，
-    故不再依赖 android_id 原值——读不到 android_id 的机型只填 device_id 也能签名。
-    """
-    prof = _assemble_profile(data, eid)
-    prof["aid"] = prof["uuid"] = _device_id_for(data)
-    return JdColorClient(
-        async_get_clientsession(hass),
-        profile=prof,
-        android_id=None,  # aid/uuid 已按 device_id 注入 profile
-        ep_hdid="",
-        sign_secret=data.get(CONF_COLOR_SIGN_SECRET) or DEFAULT_COLOR_SIGN_SECRET,
-        pin=data.get(CONF_COLOR_PIN) or "",
-        jmafinger=data.get(CONF_COLOR_JMAFINGER) or "",
-        tgt=data[CONF_TGT],
-    )
-
-
 def _build_smart_client(hass, cfg: dict) -> JdSmartClient:
     """gw/api.smart 客户端：发现(gw)、快照/控制(api.smart)同一套 HmacSHA1 签名。
 
@@ -321,29 +247,8 @@ def _device_cache_entry(d: dict, device_id: str) -> dict:
     }
 
 
-async def _async_resolve_eid(hass, data: dict) -> tuple[str | None, str | None]:
-    """解析 eid：填了用填的；否则查缓存；再否则 ds.json 现铸并写缓存。返回 (eid, error)。
-
-    缓存键用设备身份：有 android_id 用 android_id（与旧缓存兼容），否则用 device_id。
-    eid 本身与身份无关（async_fetch_eid 不吃 android_id），键只为复用/去重。
-    """
-    eid = (data.get(CONF_EID) or "").strip()
-    if eid:
-        return eid, None
-    key = (data.get(CONF_ANDROID_ID) or "").strip() or _device_id_for(data)
-    cached = await async_get_cached_eid(hass, key)
-    if cached:
-        return cached, None
-    try:
-        eid, t = await async_fetch_eid(async_get_clientsession(hass))
-    except EidFetchError as err:
-        return None, str(err)
-    await async_save_eid(hass, key, eid, t)
-    return eid, None
-
-
 def merged_config(entry) -> dict:
-    """entry.data 叠加 entry.options（非空覆盖）。让选项里补填的 凭据/设备档/eid 生效，旧条目也能用。"""
+    """entry.data 叠加 entry.options（非空覆盖）。让选项里补填/改的 凭据/设备档 生效，旧条目也能用。"""
     cfg = dict(entry.data)
     for k, v in (entry.options or {}).items():
         if v not in (None, ""):

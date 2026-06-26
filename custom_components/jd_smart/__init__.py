@@ -21,9 +21,6 @@ from .const import (
     ATTR_VALUE,
     CONF_APP_VERSION,
     CONF_CHANNEL,
-    CONF_COLOR_JMAFINGER,
-    CONF_COLOR_PIN,
-    CONF_COLOR_SIGN_SECRET,
     CONF_DEVICES,
     CONF_HARD_PLATFORM,
     CONF_KEY,
@@ -111,42 +108,6 @@ def _client_from_entry(hass: HomeAssistant, entry: ConfigEntry) -> JdSmartClient
     )
 
 
-async def _async_fetch_models(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
-    """拉各设备「可控流物模型」，供 switch/select/number 建实体。
-
-    两条来源（gw 发现 + 可选彩虹增强）：
-    - 填了彩虹 pin+jmafinger(+sign_secret) + 设备身份 → 走 getDeviceDetails 拿**完整**档位
-      （风扇风速/模式、数值范围、只读传感器区分）；
-    - 否则用 gw 发现阶段的 card_meta 降级（card_control 通常只标 Power → 只生成 Power 开关）。
-    **两种情况都会调用 coordinator.async_fetch_models**（card_meta 兜底也要建可控实体），
-    彩虹任何一步失败都只记日志、不阻断。物模型只在此拉一次（静态元数据）。
-    """
-    # 局部导入：避免 __init__ 顶层依赖 config_flow（HA 加载顺序更稳）
-    from .config_flow import _async_resolve_eid, _build_color_client, _has_identity
-
-    cfg = _merged(entry)
-    color_client = None
-    has_color = bool(
-        _has_identity(cfg) and cfg.get(CONF_COLOR_SIGN_SECRET)
-        and cfg.get(CONF_COLOR_PIN) and cfg.get(CONF_COLOR_JMAFINGER)
-    )
-    if has_color:
-        try:
-            eid, err = await _async_resolve_eid(hass, cfg)
-            if err or not eid:
-                _LOGGER.info("物模型增强跳过：eid 解析失败 %s（改用 gw card_meta 降级）", err)
-            else:
-                color_client = _build_color_client(hass, cfg, eid)
-        except Exception as err:  # noqa: BLE001  增强链路任何异常都不应拖垮 setup
-            _LOGGER.info("物模型增强跳过：彩虹客户端构建失败 %s（改用 gw card_meta 降级）", err)
-    else:
-        _LOGGER.info(
-            "未配置彩虹 pin/jmafinger，物模型用 gw 发现的 card_meta（通常仅 Power 可控）；"
-            "要完整档位/数值控制，请在「选项 → 更新凭据」补填 pin + jmafinger"
-        )
-    await coordinator.async_fetch_models(color_client)  # color_client=None → card_meta 降级
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = _client_from_entry(hass, entry)
     devices = _load_devices(entry)
@@ -156,9 +117,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = JdSmartCoordinator(hass, client, devices, scan, stream_overrides=overrides)
     if devices:
         await coordinator.async_config_entry_first_refresh()
-        # 拉各设备「可控流物模型」（彩虹 getDeviceDetails），供 switch/select/number 建实体；
-        # 失败仅记日志、回退 card_meta，不阻断 setup。
-        await _async_fetch_models(hass, entry, coordinator)
+        # 拉各设备完整物模型（gw getDeviceDetails，只需 tgt+device_id+houseId），供
+        # switch/select/number 建实体；失败仅记日志、回退 card_meta，不阻断 setup。
+        await coordinator.async_fetch_models()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -190,14 +151,6 @@ def _find_device_by_feed(hass: HomeAssistant, feed_id) -> tuple:
             if str(dev.get("feed_id")) == target:
                 return coordinator, dev
     return None, None
-
-
-def _entry_for_coordinator(hass: HomeAssistant, coordinator) -> ConfigEntry | None:
-    """反查 coordinator 所属的 ConfigEntry（按 entry_id 索引），以复用该账号凭据。"""
-    for entry_id, coord in hass.data.get(DOMAIN, {}).items():
-        if coord is coordinator:
-            return hass.config_entries.async_get_entry(entry_id)
-    return None
 
 
 def _build_commands(data: dict) -> list[dict]:
@@ -292,42 +245,23 @@ def _async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def _handle_get_device_model(call: ServiceCall) -> dict:
-        """诊断：拉某设备的彩虹 getDeviceDetails 物模型，返回原始响应 + 解析 + 可控归类。
+        """诊断：拉某设备的 **gw** getDeviceDetails 物模型，返回原始响应 + 解析 + 可控归类。
 
-        排查"为什么只有 Power 开关"：若 control_map 为空/缺 Mode/Wind 等，多半是
-        getDeviceDetails 没返回物模型（接口形态/凭据问题），运行时便静默回退了 card_meta。
+        排查"为什么只有 Power 开关"：若 control_map 为空/缺 Mode/Wind 等，多半是 gw
+        getDeviceDetails 没返回物模型（houseId 不对 / tgt 过期），运行时便静默回退了 card_meta。
         """
         from .api import control_kind, parse_stream_model
-        from .color_api import JdColorError
-        from .config_flow import _async_resolve_eid, _build_color_client, _has_identity
 
         feed_id = call.data[ATTR_FEED_ID]
         coordinator, dev = _find_device_by_feed(hass, feed_id)
         if dev is None:
             raise HomeAssistantError(f"未找到 feed_id={feed_id} 的设备（先在集成里选好设备）")
-        entry = _entry_for_coordinator(hass, coordinator)
-        if entry is None:
-            raise HomeAssistantError("找不到该设备所属配置条目")
-        cfg = _merged(entry)
-        if not (_has_identity(cfg) and cfg.get(CONF_COLOR_SIGN_SECRET)
-                and cfg.get(CONF_COLOR_PIN) and cfg.get(CONF_COLOR_JMAFINGER)):
-            raise HomeAssistantError(
-                "该诊断需彩虹凭据(color_sign_secret/pin/jmafinger)+设备身份(device_id/android_id)；"
-                "gw 发现模式下若未配置 pin/jmafinger，物模型只能用 card_meta（仅 Power）"
-            )
-        eid, err = await _async_resolve_eid(hass, cfg)
-        if err or not eid:
-            raise HomeAssistantError(f"eid 解析失败: {err}")
-        color_client = _build_color_client(hass, cfg, eid)
         try:
-            raw = await color_client.get_device_details(
-                feed_id,
-                house_id=dev.get("house_id"),
-                room_id=dev.get("room_id"),
-                device_id=dev.get("hw_device_id"),
+            raw = await coordinator.client.get_device_details(
+                dev["device_id"], feed_id, dev.get("house_id")
             )
-        except JdColorError as e:
-            raise HomeAssistantError(f"getDeviceDetails 调用失败: {e}") from e
+        except JdSmartError as e:
+            raise HomeAssistantError(f"gw getDeviceDetails 调用失败: {e}") from e
         model = parse_stream_model(raw)
         control_map = {sid: k for sid, m in model.items() if (k := control_kind(m))}
         return {

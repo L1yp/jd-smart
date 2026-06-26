@@ -20,13 +20,13 @@ from datetime import datetime, timedelta, timezone
 
 try:                                                          # 包内（HA 运行时）
     from .const import (
-        API_BASE, CONTROL_PATH, GW_API_BASE, GW_DEVICES_PATH,
-        GW_HOUSES_PATH, SNAPSHOT_PATH,
+        API_BASE, CONTROL_PATH, GW_API_BASE, GW_DETAILS_PATH,
+        GW_DEVICES_PATH, GW_HOUSES_PATH, SNAPSHOT_PATH,
     )
 except ImportError:                                            # 直接 `python api.py` 跑自检
     from const import (                                        # 脚本目录已在 sys.path
-        API_BASE, CONTROL_PATH, GW_API_BASE, GW_DEVICES_PATH,
-        GW_HOUSES_PATH, SNAPSHOT_PATH,
+        API_BASE, CONTROL_PATH, GW_API_BASE, GW_DETAILS_PATH,
+        GW_DEVICES_PATH, GW_HOUSES_PATH, SNAPSHOT_PATH,
     )
 
 _LOGGER = logging.getLogger(__name__)
@@ -465,6 +465,29 @@ class JdSmartClient:
         payload = json.dumps({"houseId": str(house_id)}, separators=(",", ":"), ensure_ascii=False)
         return await self._post(GW_DEVICES_PATH, device_id, payload, base=GW_API_BASE)
 
+    @staticmethod
+    def build_device_details_body(feed_id, house_id) -> str:
+        """gw getDeviceDetails 的 body（复刻 App）。
+
+        外层 `device_id` = feed_id 的**字符串**（精确，真正的设备选择子）；`json_data.feed_id` 是
+        数字——App 用 JS 发会丢精度（…755→…800），这里发**精确 int**（Python 任意精度），服务端按
+        外层精确字符串选设备，更稳。只需 feed_id + houseId，**不需要 roomId**（默认房间设备也能拿全模型）。
+        """
+        return json.dumps(
+            {"device_id": str(feed_id), "is_weilian": 1, "skill_id": "",
+             "json_data": {"version": "2.0", "feed_id": int(feed_id), "houseId": str(house_id)}},
+            separators=(",", ":"), ensure_ascii=False,
+        )
+
+    async def get_device_details(self, device_id: str, feed_id, house_id) -> dict:
+        """设备完整物模型（**gw，不走彩虹**）。响应 result 为 JSON 字符串，streams 在
+        `result.streams`（含 is_enum/value_des/min/max/step/stream_type）→ parse_stream_model 直接解析。
+        device_id=请求方（query，UUID 即可）；feed_id/house_id 进 body。"""
+        return await self._post(
+            GW_DETAILS_PATH, device_id, self.build_device_details_body(feed_id, house_id),
+            base=GW_API_BASE,
+        )
+
     # 注：设备物模型(getDeviceDetails)是**彩虹网关** functionId jdsmart.device.getDeviceDetails，
     # 不在本(smart api)客户端，见 color_api.JdColorClient.get_device_details。
 
@@ -604,6 +627,30 @@ def selftest() -> bool:
     socket = next((d for d in devs if str(d["feed_id"]) == "563221780494556020"), {})
     check("gw 插座 room_id 直接带出（不靠回填）",
           socket.get("room_id") == 3875794 and socket.get("room") == "客厅")
+
+    # 6) gw getDeviceDetails（完整物模型，不走彩虹）：body 复刻 + result.streams 解析
+    body = JdSmartClient.build_device_details_body(576841753861489755, "1388207")
+    check("gw details body：外层 device_id=精确字符串 feed_id + json_data.feed_id=精确裸数字",
+          '"device_id":"576841753861489755"' in body
+          and '"feed_id":576841753861489755' in body and "e+" not in body.lower())
+    check("gw details body：带 houseId、不带 roomId",
+          '"houseId":"1388207"' in body and "roomId" not in body
+          and '"version":"2.0"' in body and '"is_weilian":1' in body)
+    # parse_stream_model 直接吃 gw 响应（streams 在 result.streams，非 smartDetailInfo）
+    gw_detail = {"status": 0, "result": '{"streams":[' + ','.join([
+        '{"stream_id":"Power","stream_name":"开关","is_enum":1,"min_value":0,"max_value":1,'
+        '"ptype":"int","stream_type":0,"value_des":"[{\\"0\\":\\"关\\"},{\\"1\\":\\"开\\"}]"}',
+        '{"stream_id":"Wind","stream_name":"风速","is_enum":1,"min_value":0,"max_value":33,'
+        '"ptype":"int","stream_type":0,"value_des":"[{\\"0\\":\\"1档\\"},{\\"7\\":\\"6档\\"}]"}',
+        '{"stream_id":"TimingSetHour","stream_name":"定时设置时","is_enum":-1,"min_value":0,'
+        '"max_value":24,"step":"1","ptype":"int","stream_type":0,"value_des":""}',
+    ]) + ']}'}
+    gm = parse_stream_model(gw_detail)
+    check("gw getDeviceDetails → result.streams 解析出全模型",
+          set(gm) == {"Power", "Wind", "TimingSetHour"})
+    check("gw 风扇 Power→switch / Wind→select / TimingSetHour→number",
+          control_kind(gm["Power"]) == "switch" and control_kind(gm["Wind"]) == "select"
+          and control_kind(gm["TimingSetHour"]) == "number" and gm["TimingSetHour"]["max"] == 24)
 
     print("\napi self-test", "PASS" if ok else "FAIL")
     return ok

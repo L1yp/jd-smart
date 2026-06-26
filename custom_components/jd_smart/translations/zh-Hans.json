@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "小京鱼 JD Smart —— 账号凭据",
-        "description": "只需两项：\n① **tgt**——登录票据（会过期，**必须是小京鱼 App 的** tgt）；\n② **device_id**——直接粘贴抓包/curl 里的 device_id（如 `b0b57721-…` 这种 UUID 即可：它不进签名、服务端不严格校验，**不用 md5/android_id**）。\n\n发现走 gw.smart 轻量接口，**不需要 jmafinger/pin/eid 等彩虹参数**；机型/版本等 App 档走默认值。\n\n想要完整物模型（风扇档位/模式等），装好后到「选项 → 高级设置」补 pin + jmafinger。同一手机可加多个账号（以家庭区分）。",
+        "description": "只需两项：\n① **tgt**——登录票据（会过期，**必须是小京鱼 App 的** tgt）；\n② **device_id**——直接粘贴抓包/curl 里的 device_id（如 `b0b57721-…` 这种 UUID 即可：它不进签名、服务端不严格校验，**不用 md5/android_id**）。\n\n发现、快照、控制、**完整物模型**全走 gw/api.smart 同一套签名，**不需要 jmafinger/pin/eid 等彩虹参数**；机型/版本等 App 档走默认值。\n\n风扇档位/模式、数值控制等完整档位会**自动获取**，无需额外凭据。同一手机可加多个账号（以家庭区分）。",
         "data": {
           "tgt": "tgt（登录票据，会过期；小京鱼 App）",
           "device_id": "device_id（粘贴抓包/curl 里的，UUID 即可）"
@@ -22,8 +22,7 @@
     },
     "error": {
       "need_identity": "请填 device_id（直接粘贴抓包/curl 里的，UUID 即可）。若你只有 android_id，可去「高级设置」填，系统会自动算。",
-      "cannot_connect": "发现失败：{detail}。多为 tgt 过期或网络问题——请确认 tgt 是小京鱼 App 的最新值。",
-      "eid_fetch_failed": "获取 eid 失败：{detail}。可手动填一个 eid，或检查设备身份/网络。"
+      "cannot_connect": "发现失败：{detail}。多为 tgt 过期或网络问题——请确认 tgt 是小京鱼 App 的最新值。"
     },
     "abort": {
       "already_configured": "该账号已配置（按 pin 或家庭判定）。同一账号不要重复添加。",
@@ -37,7 +36,7 @@
       "init": {
         "title": "小京鱼选项",
         "menu_options": {
-          "credentials": "更新凭据（tgt / 设备身份 / 可选 pin+jmafinger）",
+          "credentials": "更新凭据（tgt / 设备身份）",
           "rediscover": "重新发现设备",
           "streams": "编辑传感器 / 单位",
           "settings": "高级设置（全部参数）",
@@ -46,7 +45,7 @@
       },
       "credentials": {
         "title": "更新凭据",
-        "description": "更新这两项（tgt 最容易过期）：tgt 登录票据、device_id（粘贴抓包/curl 里的，UUID 即可）。android_id（备选身份）与 pin/jmafinger（完整物模型增强）都在「高级设置」里改。改完若设备有变动，再点「重新发现设备」。",
+        "description": "更新这两项（tgt 最容易过期）：tgt 登录票据、device_id（粘贴抓包/curl 里的，UUID 即可）。完整物模型自动获取，无需额外凭据；android_id（备选身份）在「高级设置」里改。改完若设备有变动，再点「重新发现设备」。",
         "data": {
           "tgt": "tgt（登录票据，会过期；小京鱼 App）",
           "device_id": "device_id（粘贴抓包/curl 里的，UUID 即可）"
@@ -54,23 +53,13 @@
       },
       "settings": {
         "title": "高级设置（全部参数）",
-        "description": "发现走 gw（只需 tgt + 设备身份）；seg1/key 用于快照/控制轮询；pin/jmafinger/color_sign_secret 可选——填了才走彩虹 getDeviceDetails 拿完整物模型；device_id（或 android_id）算设备号；eid 留空则自动获取。从旧版升级：这里把 tgt 和（可选）pin/jmafinger 补填好，再点「重新发现设备」。",
+        "description": "发现、快照、控制、完整物模型全走 gw/api.smart 的同一套签名，只需 tgt + 设备身份（device_id 或 android_id，首选 device_id 直接粘贴 UUID）。seg1/key/机型/版本是 App 级常量，一般不用动。彩虹那套（pin/jmafinger/eid/机型档）已废弃、不再需要。",
         "data": {
-          "color_sign_secret": "color_sign_secret（彩虹 HMAC 密钥）",
-          "color_pin": "color_pin（Cookie 的 pin）",
-          "color_jmafinger": "color_jmafinger（Cookie 的 UUID）",
-          "tgt": "tgt（登录票据）",
+          "tgt": "tgt（登录票据，会过期；小京鱼 App）",
+          "device_id": "device_id（首选；粘贴抓包里的，UUID 即可）",
+          "android_id": "android_id（备选身份；16 位 hex）",
           "seg1": "seg1（恒定标识）",
           "key": "HmacSHA1 密钥",
-          "android_id": "android_id（16 位 hex；或用 device_id）",
-          "device_id": "device_id（首选；= md5(android_id)，优先于 android_id）",
-          "d_brand": "品牌",
-          "d_model": "型号",
-          "os_version": "系统版本（SDK_INT，如 28）",
-          "screen": "分辨率（如 1080*2160）",
-          "area": "LBS 区域码",
-          "network_type": "网络类型",
-          "eid": "eid（可选；留空=自动获取）",
           "hard_platform": "hard_platform（机型）",
           "app_version": "app_version",
           "plat_version": "plat_version",
@@ -142,7 +131,7 @@
     },
     "get_device_model": {
       "name": "查询设备物模型（诊断）",
-      "description": "拉取设备的彩虹 getDeviceDetails 物模型，返回原始响应+解析+可控归类，用于排查「为什么只有 Power 开关」。",
+      "description": "拉取设备的 gw getDeviceDetails 物模型，返回原始响应+解析+可控归类，用于排查「为什么只有 Power 开关」。",
       "fields": {
         "feed_id": {
           "name": "feed_id",
